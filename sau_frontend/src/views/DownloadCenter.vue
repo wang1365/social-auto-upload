@@ -95,7 +95,7 @@
         </el-table-column>
         <el-table-column prop="filename" label="本地文件" min-width="220" show-overflow-tooltip />
         <el-table-column prop="updatedAt" label="更新时间" width="180" />
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <el-button size="small" @click="openTaskDetail(row)">详情</el-button>
             <el-button
@@ -105,6 +105,14 @@
               @click="openTaskDetail(row, true)"
             >
               播放
+            </el-button>
+            <el-button
+              size="small"
+              type="warning"
+              v-if="row.sourceUrl"
+              @click="retryDownload(row)"
+            >
+              重新下载
             </el-button>
           </template>
         </el-table-column>
@@ -261,6 +269,13 @@
             >
               复制详细信息
             </el-button>
+            <el-button
+              v-if="selectedTask.sourceUrl"
+              type="warning"
+              @click="retryDownload(selectedTask)"
+            >
+              重新下载
+            </el-button>
           </div>
         </div>
       </template>
@@ -275,7 +290,9 @@ import { Plus, Refresh } from '@element-plus/icons-vue'
 
 import { downloadApi } from '@/api/download'
 import { materialApi } from '@/api/material'
+import { useAppStore } from '@/stores/app'
 
+const appStore = useAppStore()
 const loading = ref(false)
 const creating = ref(false)
 const createDialogVisible = ref(false)
@@ -286,6 +303,7 @@ const tasks = ref([])
 const selectedTask = ref(null)
 const createForm = ref({ url: '' })
 const activePlaybackTab = ref('source')
+const latestMaterialSignature = ref('')
 let pollTimer = null
 
 const filteredTasks = computed(() => {
@@ -391,6 +409,18 @@ const stopPolling = () => {
   }
 }
 
+const buildMaterialSignature = (taskList) =>
+  taskList
+    .filter((task) => task.status === 'success' && task.materialId)
+    .map((task) => `${task.materialId}:${task.updatedAt || ''}`)
+    .sort()
+    .join('|')
+
+const syncMaterials = async () => {
+  const response = await materialApi.getAllMaterials()
+  appStore.setMaterials(response.data || [])
+}
+
 const schedulePolling = () => {
   stopPolling()
   if (!hasActiveTasks.value) return
@@ -404,6 +434,11 @@ const fetchTasks = async (showMessage = false) => {
   try {
     const response = await downloadApi.listYoutubeTasks()
     tasks.value = response.data || []
+    const materialSignature = buildMaterialSignature(tasks.value)
+    if (materialSignature !== latestMaterialSignature.value) {
+      latestMaterialSignature.value = materialSignature
+      await syncMaterials()
+    }
     if (selectedTask.value) {
       const current = tasks.value.find((item) => item.taskId === selectedTask.value.taskId)
       if (current) {
@@ -447,6 +482,27 @@ const createDownloadTask = async () => {
   } catch (error) {
     console.error(error)
     ElMessage.error(error.message || '创建下载任务失败')
+  } finally {
+    creating.value = false
+  }
+}
+
+const retryDownload = async (task) => {
+  if (!task.sourceUrl) {
+    ElMessage.warning('没有视频链接，无法重新下载')
+    return
+  }
+  creating.value = true
+  try {
+    const response = await downloadApi.createYoutubeDownloadTask(task.sourceUrl)
+    await fetchTasks()
+    const createdTask = await downloadApi.getYoutubeTask(response.data.taskId)
+    selectedTask.value = createdTask.data
+    detailVisible.value = true
+    ElMessage.success('重新下载任务已创建')
+  } catch (error) {
+    console.error(error)
+    ElMessage.error(error.message || '创建重新下载任务失败')
   } finally {
     creating.value = false
   }

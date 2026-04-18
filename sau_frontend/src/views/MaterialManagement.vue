@@ -305,9 +305,7 @@ const isImageFile = (filename) =>
   )
 
 onMounted(() => {
-  if (!appStore.materials.length) {
-    fetchMaterials()
-  }
+  fetchMaterials()
 })
 </script>
 

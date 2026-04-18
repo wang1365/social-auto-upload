@@ -1,9 +1,14 @@
 import re
+import logging
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
+
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+ytdlp_logger = logging.getLogger('yt-dlp')
 
 
 YOUTUBE_HOSTS = {
@@ -107,6 +112,15 @@ def build_ytdlp_options(proxy: str | None = None, cookiefile: str | None = None,
     return options
 
 
+PRIMARY_FORMAT = (
+    "best*[ext=mp4][vcodec!=none][acodec!=none]/"
+    "best*[vcodec!=none][acodec!=none]/"
+    "bv*+ba/best"
+)
+
+FALLBACK_FORMAT = "best/bv*+ba"
+
+
 def extract_video_metadata(url: str, proxy: str | None = None, cookiefile: str | None = None) -> dict:
     options = build_ytdlp_options(
         proxy,
@@ -144,47 +158,76 @@ def download_video(
         if progress_callback:
             progress_callback(status)
 
-    options = build_ytdlp_options(
-        proxy,
-        cookiefile=cookiefile,
-        quiet=True,
-        noplaylist=True,
-        merge_output_format="mp4",
-        outtmpl=template,
-        format=(
-            "bv*+ba/"
-            "best*[ext=mp4][vcodec!=none][acodec!=none]/"
-            "best*[vcodec!=none][acodec!=none]/"
-            "best"
-        ),
-        progress_hooks=[progress_hook],
-    )
+    def find_downloaded_file(result: dict | None) -> Path | None:
+        final_path = None
+        if isinstance(result, dict):
+            requested = result.get("requested_downloads") or []
+            if requested:
+                filepath = requested[0].get("filepath")
+                if filepath:
+                    final_path = Path(filepath)
+            if final_path is None:
+                ext = result.get("ext") or "mp4"
+                candidate = output_dir / f"{filename_stem}.{ext}"
+                if candidate.exists():
+                    final_path = candidate
 
-    with YoutubeDL(options) as ydl:
-        result = ydl.extract_info(url, download=True)
+        if final_path is None or not final_path.exists():
+            matches = sorted(
+                (path for path in output_dir.glob(f"{filename_stem}.*") if ".f" not in "".join(path.suffixes)),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )
+            if matches:
+                final_path = matches[0]
+        return final_path
+
+    def cleanup_partial_files() -> None:
+        for path in output_dir.glob(f"{filename_stem}*"):
+            if path.is_file():
+                try:
+                    path.unlink()
+                except OSError:
+                    ytdlp_logger.warning("Failed to remove partial file: %s", path)
+
+    def run_download(format_selector: str):
+        options = build_ytdlp_options(
+            proxy,
+            cookiefile=cookiefile,
+            quiet=True,
+            noplaylist=True,
+            merge_output_format="mp4",
+            outtmpl=template,
+            format=format_selector,
+            progress_hooks=[progress_hook],
+        )
+
+        ytdlp_logger.info("开始下载 YouTube 视频: %s", url)
+        ytdlp_logger.info("yt-dlp 配置参数: %s", options)
+        ytdlp_logger.info("输出目录: %s", output_dir)
+        ytdlp_logger.info("文件名模板: %s", template)
+
+        with YoutubeDL(options) as ydl:
+            return ydl.extract_info(url, download=True)
+
+    try:
+        result = run_download(PRIMARY_FORMAT)
+    except DownloadError as exc:
+        error_text = str(exc).lower()
+        if "empty" not in error_text and "merge" not in error_text:
+            raise
+        ytdlp_logger.warning("Primary YouTube format failed, retrying with fallback: %s", exc)
+        cleanup_partial_files()
+        result = run_download(FALLBACK_FORMAT)
 
     if isinstance(result, dict) and result.get("entries"):
         raise DownloadError("playlist is not supported")
 
-    final_path = None
-    if isinstance(result, dict):
-        requested = result.get("requested_downloads") or []
-        if requested:
-            filepath = requested[0].get("filepath")
-            if filepath:
-                final_path = Path(filepath)
-        if final_path is None:
-            ext = result.get("ext") or "mp4"
-            candidate = output_dir / f"{filename_stem}.{ext}"
-            if candidate.exists():
-                final_path = candidate
-
-    if final_path is None or not final_path.exists():
-        matches = sorted(output_dir.glob(f"{filename_stem}.*"))
-        if matches:
-            final_path = matches[0]
+    final_path = find_downloaded_file(result)
 
     if final_path is None or not final_path.exists():
         raise DownloadError("download finished but local file not found")
+    if final_path.stat().st_size == 0:
+        raise DownloadError("downloaded file is empty")
 
     return final_path

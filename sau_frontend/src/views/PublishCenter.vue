@@ -929,21 +929,13 @@ const selectLocalUpload = (tab) => {
 const selectMaterialLibrary = async (tab) => {
   currentUploadTab.value = tab
   
-  // 如果素材库为空，先获取素材数据
-  if (materials.value.length === 0) {
-    try {
-      const response = await materialApi.getAllMaterials()
-      if (response.code === 200) {
-        appStore.setMaterials(response.data)
-      } else {
-        ElMessage.error('获取素材列表失败')
-        return
-      }
-    } catch (error) {
-      console.error('获取素材列表出错:', error)
-      ElMessage.error('获取素材列表失败')
-      return
-    }
+  try {
+    const response = await materialApi.getAllMaterials()
+    appStore.setMaterials(response.data || [])
+  } catch (error) {
+    console.error('获取素材列表出错:', error)
+    ElMessage.error('获取素材列表失败')
+    return
   }
   
   selectedMaterials.value = []
