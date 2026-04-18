@@ -1,0 +1,45 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "SAU Backend",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "flask",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "FLASK_APP": "sau_backend:app",
+        "FLASK_DEBUG": "1",
+        "PYTHONUTF8": "1"
+      },
+      "args": [
+        "run",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "5409"
+      ],
+      "jinja": true,
+      "justMyCode": false,
+      "console": "integratedTerminal",
+      "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe"
+    },
+    {
+      "name": "SAU Frontend",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev -- --host=0.0.0.0",
+      "cwd": "${workspaceFolder}\\sau_frontend"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "SAU Full Stack",
+      "configurations": [
+        "SAU Backend",
+        "SAU Frontend"
+      ],
+      "stopAll": true
+    }
+  ]
+}

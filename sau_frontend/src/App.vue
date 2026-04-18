@@ -1,11 +1,11 @@
 <template>
   <div id="app">
     <el-container>
-      <el-aside :width="isCollapse ? '64px' : '200px'">
+      <el-aside :width="isCollapse ? '64px' : '220px'">
         <div class="sidebar">
           <div class="logo">
             <img v-show="isCollapse" src="/vite.svg" alt="Logo" class="logo-img">
-            <h2 v-show="!isCollapse">自媒体自动化运营系统</h2>
+            <h2 v-show="!isCollapse">Social Auto Upload</h2>
           </div>
           <el-menu
             :router="true"
@@ -28,9 +28,17 @@
               <el-icon><Picture /></el-icon>
               <span>素材管理</span>
             </el-menu-item>
+            <el-menu-item index="/download-center">
+              <el-icon><Download /></el-icon>
+              <span>素材下载</span>
+            </el-menu-item>
             <el-menu-item index="/publish-center">
               <el-icon><Upload /></el-icon>
               <span>发布中心</span>
+            </el-menu-item>
+            <el-menu-item index="/system-settings">
+              <el-icon><Setting /></el-icon>
+              <span>系统配置</span>
             </el-menu-item>
             <el-menu-item index="/about">
               <el-icon><DataAnalysis /></el-icon>
@@ -42,12 +50,7 @@
       <el-container>
         <el-header>
           <div class="header-content">
-            <div class="header-left">
-              <el-icon class="toggle-sidebar" @click="toggleSidebar"><Fold /></el-icon>
-            </div>
-            <div class="header-right">
-              <!-- 账号信息已移除 -->
-            </div>
+            <el-icon class="toggle-sidebar" @click="toggleSidebar"><Fold /></el-icon>
           </div>
         </el-header>
         <el-main>
@@ -59,24 +62,23 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import {
-  HomeFilled, User, DataAnalysis,
-  Fold, Picture, Upload
+  DataAnalysis,
+  Download,
+  Fold,
+  HomeFilled,
+  Picture,
+  Setting,
+  Upload,
+  User,
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
-
-// 当前激活的菜单项
-const activeMenu = computed(() => {
-  return route.path
-})
-
-// 侧边栏折叠状态
+const activeMenu = computed(() => route.path)
 const isCollapse = ref(false)
 
-// 切换侧边栏折叠状态
 const toggleSidebar = () => {
   isCollapse.value = !isCollapse.value
 }
@@ -99,50 +101,40 @@ const toggleSidebar = () => {
   height: 100vh;
   overflow: hidden;
   transition: width 0.3s;
-  
-  .sidebar {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    
-    .logo {
-      height: 60px;
-      padding: 0 16px;
-      display: flex;
-      align-items: center;
-      background-color: #002140;
-      overflow: hidden;
-      
-      .logo-img {
-        width: 32px;
-        height: 32px;
-        margin-right: 12px;
-      }
-      
-      h2 {
-        color: #fff;
-        font-size: 16px;
-        font-weight: 600;
-        white-space: nowrap;
-        margin: 0;
-      }
-    }
-    
-    .sidebar-menu {
-      border-right: none;
-      flex: 1;
-      
-      .el-menu-item {
-        display: flex;
-        align-items: center;
-        
-        .el-icon {
-          margin-right: 10px;
-          font-size: 18px;
-        }
-      }
-    }
-  }
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.logo {
+  height: 60px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  background-color: #002140;
+  overflow: hidden;
+}
+
+.logo-img {
+  width: 32px;
+  height: 32px;
+  margin-right: 12px;
+}
+
+.logo h2 {
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+  margin: 0;
+}
+
+.sidebar-menu {
+  border-right: none;
+  flex: 1;
 }
 
 .el-header {
@@ -150,44 +142,23 @@ const toggleSidebar = () => {
   box-shadow: 0 1px 4px rgba(0, 21, 41, 0.08);
   padding: 0;
   height: 60px;
-  
-  .header-content {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    height: 100%;
-    padding: 0 16px;
-    
-    .header-left {
-      .toggle-sidebar {
-        font-size: 20px;
-        cursor: pointer;
-        color: $text-regular;
-        
-        &:hover {
-          color: $primary-color;
-        }
-      }
-    }
-    
-    .header-right {
-      .user-dropdown {
-        display: flex;
-        align-items: center;
-        cursor: pointer;
-        
-        .username {
-          margin: 0 8px;
-          color: $text-regular;
-        }
-        
-        .el-icon {
-          font-size: 12px;
-          color: $text-secondary;
-        }
-      }
-    }
-  }
+}
+
+.header-content {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 16px;
+}
+
+.toggle-sidebar {
+  font-size: 20px;
+  cursor: pointer;
+  color: $text-regular;
+}
+
+.toggle-sidebar:hover {
+  color: $primary-color;
 }
 
 .el-main {
