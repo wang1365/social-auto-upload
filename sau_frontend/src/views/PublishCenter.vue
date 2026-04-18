@@ -176,7 +176,9 @@
           <el-dialog
             v-model="materialLibraryVisible"
             title="选择素材"
-            width="800px"
+            width="900px"
+            height="800px"
+            top="5vh"
             class="material-library-dialog"
           >
             <div class="material-library-content">
@@ -189,7 +191,10 @@
                   >
                     <el-checkbox :label="material.id" class="material-checkbox">
                       <div class="material-info">
-                        <div class="material-name">{{ material.filename }}</div>
+                        <div class="material-name">{{ material.video_title_zh || material.video_title || extractChineseTitle(material.filename) }}</div>
+                        <div v-if="material.video_title && material.video_title !== material.video_title_zh" class="material-original-title">
+                          {{ material.video_title }}
+                        </div>
                         <div class="material-details">
                           <span class="file-size">{{ material.filesize }}MB</span>
                           <span class="upload-time">{{ material.upload_time }}</span>
@@ -269,16 +274,31 @@
           <!-- 平台选择 -->
           <div class="platform-section">
             <h3>平台</h3>
-            <el-radio-group v-model="tab.selectedPlatform" class="platform-radios" @change="() => handlePlatformChange(tab)">
-              <el-radio 
-                v-for="platform in platforms" 
-                :key="platform.key"
-                :label="platform.key"
-                class="platform-radio"
+            <div class="platform-with-accounts">
+              <el-checkbox-group v-model="tab.selectedPlatforms" class="platform-checkboxes" @change="() => handlePlatformChange(tab)">
+                <div v-for="platform in platforms" :key="platform.key" class="platform-item">
+                  <el-checkbox 
+                    :label="platform.key"
+                    class="platform-checkbox"
+                  >
+                    {{ platform.name }}
+                  </el-checkbox>
+                  <div v-if="tab.selectedPlatforms.includes(platform.key)" class="platform-accounts">
+                    <span class="account-info">
+                      {{ getPlatformAccounts(platform.key, tab.selectedAccounts).map(getAccountDisplayName).join(', ') }}
+                    </span>
+                  </div>
+                </div>
+              </el-checkbox-group>
+              <el-button 
+                type="primary" 
+                plain 
+                @click="openAccountDialog(tab)"
+                class="select-account-btn"
               >
-                {{ platform.name }}
-              </el-radio>
-            </el-radio-group>
+                选择账号
+              </el-button>
+            </div>
           </div>
 
           <!-- 原创声明 -->
@@ -291,7 +311,7 @@
           </div>
 
           <!-- 草稿选项 (仅在视频号可见) -->
-          <div v-if="tab.selectedPlatform === 2" class="draft-section">
+          <div v-if="tab.selectedPlatforms.includes(2)" class="draft-section">
             <el-checkbox
               v-model="tab.isDraft"
               label="视频号仅保存草稿(用手机发布)"
@@ -300,7 +320,7 @@
           </div>
 
           <!-- 标签 (仅在抖音可见) -->
-          <div v-if="tab.selectedPlatform === 3" class="product-section">
+          <div v-if="tab.selectedPlatforms.includes(3)" class="product-section">
             <h3>商品链接</h3>
             <el-input
               v-model="tab.productTitle"
@@ -527,7 +547,7 @@ const defaultTabInit = {
   fileList: [], // 后端返回的文件名列表
   displayFileList: [], // 用于显示的文件列表
   selectedAccounts: [], // 选中的账号ID列表
-  selectedPlatform: 1, // 选中的平台（单选）
+  selectedPlatforms: [3, 1, 4], // 选中的平台（多选），默认勾选抖音、小红书、快手
   title: '',
   productLink: '', // 商品链接
   productTitle: '', // 商品名称
@@ -552,11 +572,6 @@ const makeNewTab = () => {
   }
 }
 
-// tab页数据 - 默认只有一个tab (use deep copy to avoid shared refs)
-const tabs = reactive([
-  makeNewTab()
-])
-
 // 账号相关状态
 const accountDialogVisible = ref(false)
 const tempSelectedAccounts = ref([])
@@ -578,8 +593,9 @@ const getPlatformName = (platformId) => {
 
 // 根据选择的平台获取可用账号列表
 const availableAccounts = computed(() => {
-  const currentPlatform = currentTab.value ? getPlatformName(currentTab.value.selectedPlatform) : null
-  return currentPlatform ? accountStore.accounts.filter(acc => acc.platform === currentPlatform) : []
+  // 获取当前tab选中的所有平台名称
+  const platformNames = currentTab.value ? currentTab.value.selectedPlatforms.map(getPlatformName) : []
+  return accountStore.accounts.filter(acc => platformNames.includes(acc.platform))
 })
 
 // 根据平台ID获取该平台的第一个可用账号
@@ -589,17 +605,52 @@ const getFirstAccountForPlatform = (platformId) => {
   return accounts.length > 0 ? accounts[0].id : null
 }
 
-// 处理平台切换，自动填充第一个账号
-const handlePlatformChange = (tab) => {
-  const firstAccount = getFirstAccountForPlatform(tab.selectedPlatform)
-  if (firstAccount) {
-    // 清空当前账号列表并添加第一个账号
-    tab.selectedAccounts = [firstAccount]
-  } else {
-    // 如果没有可用账号，清空账号列表
-    tab.selectedAccounts = []
-  }
+// 根据平台ID获取该平台的账号列表
+const getPlatformAccounts = (platformId, allAccounts) => {
+  const platformName = getPlatformName(platformId)
+  return allAccounts.filter(accountId => {
+    const account = accountStore.accounts.find(acc => acc.id === accountId)
+    return account && account.platform === platformName
+  })
 }
+
+// 处理平台切换，自动填充每个平台的第一个账号
+const handlePlatformChange = (tab) => {
+  const selectedAccounts = []
+  
+  // 为每个选中的平台添加第一个可用账号
+  tab.selectedPlatforms.forEach(platformId => {
+    const firstAccount = getFirstAccountForPlatform(platformId)
+    if (firstAccount) {
+      selectedAccounts.push(firstAccount)
+    }
+  })
+  
+  tab.selectedAccounts = selectedAccounts
+}
+
+// 从文件名中提取中文标题
+const extractChineseTitle = (filename) => {
+  // 移除文件扩展名
+  const nameWithoutExt = filename.replace(/\.[^/.]+$/, '')
+  // 提取中文部分
+  const chineseMatch = nameWithoutExt.match(/[\u4e00-\u9fa5]+/g)
+  if (chineseMatch) {
+    return chineseMatch.join(' ')
+  }
+  // 如果没有中文，返回原始文件名（不含扩展名）
+  return nameWithoutExt
+}
+
+// tab页数据 - 默认只有一个tab (use deep copy to avoid shared refs)
+const tabs = reactive([
+  makeNewTab()
+])
+
+// 初始化第一个tab的账号
+setTimeout(() => {
+  handlePlatformChange(tabs[0])
+}, 0)
 
 // 话题相关状态
 const topicDialogVisible = ref(false)
@@ -661,6 +712,14 @@ const handleUploadSuccess = (response, file, tab) => {
       name: item.name,
       url: item.url
     }))]
+    
+    // 自动提取中文标题并填充到表单
+    if (!tab.title) {
+      const chineseTitle = extractChineseTitle(file.name)
+      if (chineseTitle) {
+        tab.title = chineseTitle
+      }
+    }
     
     ElMessage.success('文件上传成功')
   } else {
@@ -788,7 +847,7 @@ const confirmPublish = async (tab) => {
     tab.publishing = false
     throw new Error('请输入标题')
   }
-  if (!tab.selectedPlatform) {
+  if (!tab.selectedPlatforms || tab.selectedPlatforms.length === 0) {
     ElMessage.error('请选择发布平台')
     tab.publishing = false
     throw new Error('请选择发布平台')
@@ -799,31 +858,46 @@ const confirmPublish = async (tab) => {
     throw new Error('请选择发布账号')
   }
 
-  // 构造发布数据，符合后端API格式
-  const publishData = {
-    type: tab.selectedPlatform,
-    title: tab.title,
-    tags: tab.selectedTopics, // 不带#号的话题列表
-    fileList: tab.fileList.map(file => file.path), // 只发送文件路径
-    accountList: tab.selectedAccounts.map(accountId => {
+  // 为每个选中的平台并发发布
+  const publishPromises = tab.selectedPlatforms.map(platformId => {
+    // 获取平台名称
+    const platformName = getPlatformName(platformId)
+    
+    // 过滤出当前平台的账号
+    const platformAccounts = tab.selectedAccounts.filter(accountId => {
       const account = accountStore.accounts.find(acc => acc.id === accountId)
-      return account ? account.filePath : accountId
-    }), // 发送账号的文件路径
-    enableTimer: tab.scheduleEnabled ? 1 : 0,
-    videosPerDay: tab.scheduleEnabled ? tab.videosPerDay || 1 : 1,
-    dailyTimes: tab.scheduleEnabled ? tab.dailyTimes || ['10:00'] : ['10:00'],
-    startDays: tab.scheduleEnabled ? tab.startDays || 0 : 0,
-    category: tab.isOriginal ? 1 : 0, // 1表示原创，0表示非原创
-    productLink: tab.productLink.trim() || '',
-    productTitle: tab.productTitle.trim() || '',
-    isDraft: tab.isDraft
-  }
+      return account && account.platform === platformName
+    })
+    
+    // 构造发布数据，符合后端API格式
+    const publishData = {
+      type: platformId,
+      title: tab.title,
+      tags: tab.selectedTopics, // 不带#号的话题列表
+      fileList: tab.fileList.map(file => file.path), // 只发送文件路径
+      accountList: platformAccounts.map(accountId => {
+        const account = accountStore.accounts.find(acc => acc.id === accountId)
+        return account ? account.filePath : accountId
+      }), // 发送账号的文件路径
+      enableTimer: tab.scheduleEnabled ? 1 : 0,
+      videosPerDay: tab.scheduleEnabled ? tab.videosPerDay || 1 : 1,
+      dailyTimes: tab.scheduleEnabled ? tab.dailyTimes || ['10:00'] : ['10:00'],
+      startDays: tab.scheduleEnabled ? tab.startDays || 0 : 0,
+      category: tab.isOriginal ? 1 : 0, // 1表示原创，0表示非原创
+      productLink: tab.productLink.trim() || '',
+      productTitle: tab.productTitle.trim() || '',
+      isDraft: tab.isDraft
+    }
 
-  // 调用后端发布API（使用统一的http封装）
+    // 调用后端发布API（使用统一的http封装）
+    return http.post('/postVideo', publishData)
+  })
+
   try {
-    const data = await http.post('/postVideo', publishData)
+    // 并发执行所有发布请求
+    const results = await Promise.all(publishPromises)
     tab.publishStatus = {
-      message: '发布成功',
+      message: `发布成功，共发布到 ${results.length} 个平台`,
       type: 'success'
     }
     // 清空当前tab的数据
@@ -909,6 +983,26 @@ const confirmMaterialSelection = () => {
       name: item.name,
       url: item.url
     }))]
+    
+    // 使用素材库中的中文标题填充到表单
+    if (!currentUploadTab.value.title && selectedMaterials.value.length > 0) {
+      const firstMaterial = materials.value.find(m => m.id === selectedMaterials.value[0])
+      if (firstMaterial) {
+        // 优先使用素材库中的中文标题
+        if (firstMaterial.video_title_zh) {
+          currentUploadTab.value.title = firstMaterial.video_title_zh
+        } else if (firstMaterial.video_title) {
+          // 如果没有中文标题，使用原标题
+          currentUploadTab.value.title = firstMaterial.video_title
+        } else {
+          // 如果都没有，再从文件名提取
+          const chineseTitle = extractChineseTitle(firstMaterial.filename)
+          if (chineseTitle) {
+            currentUploadTab.value.title = chineseTitle
+          }
+        }
+      }
+    }
   }
   
   const addedCount = selectedMaterials.value.length
@@ -1213,6 +1307,45 @@ const batchPublish = async () => {
           }
         }
         
+        .platform-with-accounts {
+          display: flex;
+          flex-direction: column;
+          gap: 15px;
+        }
+        
+        .platform-checkboxes {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+        
+        .platform-item {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+        
+        .platform-checkbox {
+          margin-right: 0;
+        }
+        
+        .platform-accounts {
+          margin-left: 5px;
+        }
+        
+        .account-info {
+          font-size: 14px;
+          color: #606266;
+          background-color: #f5f7fa;
+          padding: 2px 8px;
+          border-radius: 4px;
+        }
+        
+        .select-account-btn {
+          align-self: flex-start;
+        }
+        
         .title-input {
           max-width: 600px;
         }
@@ -1416,6 +1549,70 @@ const batchPublish = async () => {
       display: flex;
       justify-content: flex-end;
       gap: 12px;
+    }
+  }
+  
+  // 素材库选择弹窗样式
+  .material-library-dialog {
+    .material-library-content {
+      max-height: 750px;
+      overflow-y: auto;
+      padding: 10px 0;
+    }
+    
+    .material-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    
+    .material-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 14px;
+      background-color: #f5f7fa;
+      border-radius: 6px;
+      transition: all 0.3s;
+      
+      &:hover {
+        background-color: #ecf5ff;
+      }
+    }
+    
+    .material-info {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      
+      .material-name {
+        font-size: 14px;
+        font-weight: 500;
+        color: #303133;
+        line-height: 1.4;
+        white-space: normal;
+        word-break: break-word;
+      }
+      
+      .material-original-title {
+        font-size: 12px;
+        color: #909399;
+        line-height: 1.3;
+        white-space: normal;
+        word-break: break-word;
+        padding-left: 0;
+      }
+      
+      .material-details {
+        display: flex;
+        gap: 20px;
+        margin-top: 2px;
+        font-size: 12px;
+        color: #909399;
+        line-height: 1.3;
+      }
     }
   }
 }
