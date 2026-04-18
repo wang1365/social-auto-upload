@@ -66,9 +66,13 @@
           <div class="upload-section">
             <h3>视频</h3>
             <div class="upload-options">
-              <el-button type="primary" @click="showUploadOptions(tab)" class="upload-btn">
+              <el-button type="primary" @click="selectLocalUpload(tab)" class="upload-btn">
                 <el-icon><Upload /></el-icon>
-                上传视频
+                从本地视频上传
+              </el-button>
+              <el-button type="success" @click="selectMaterialLibrary(tab)" class="upload-btn">
+                <el-icon><Folder /></el-icon>
+                从素材库上传
               </el-button>
             </div>
             
@@ -84,25 +88,6 @@
               </div>
             </div>
           </div>
-
-          <!-- 上传选项弹窗 -->
-          <el-dialog
-            v-model="uploadOptionsVisible"
-            title="选择上传方式"
-            width="400px"
-            class="upload-options-dialog"
-          >
-            <div class="upload-options-content">
-              <el-button type="primary" @click="selectLocalUpload" class="option-btn">
-                <el-icon><Upload /></el-icon>
-                本地上传
-              </el-button>
-              <el-button type="success" @click="selectMaterialLibrary" class="option-btn">
-                <el-icon><Folder /></el-icon>
-                素材库
-              </el-button>
-            </div>
-          </el-dialog>
 
           <!-- 本地上传弹窗 -->
           <el-dialog
@@ -284,7 +269,7 @@
           <!-- 平台选择 -->
           <div class="platform-section">
             <h3>平台</h3>
-            <el-radio-group v-model="tab.selectedPlatform" class="platform-radios">
+            <el-radio-group v-model="tab.selectedPlatform" class="platform-radios" @change="() => handlePlatformChange(tab)">
               <el-radio 
                 v-for="platform in platforms" 
                 :key="platform.key"
@@ -517,7 +502,6 @@ let tabCounter = 1
 const appStore = useAppStore()
 
 // 上传相关状态
-const uploadOptionsVisible = ref(false)
 const localUploadVisible = ref(false)
 const materialLibraryVisible = ref(false)
 const currentUploadTab = ref(null)
@@ -581,17 +565,41 @@ const currentTab = ref(null)
 // 获取账号状态管理
 const accountStore = useAccountStore()
 
-// 根据选择的平台获取可用账号列表
-const availableAccounts = computed(() => {
+// 根据平台ID获取平台名称
+const getPlatformName = (platformId) => {
   const platformMap = {
     3: '抖音',
     2: '视频号',
     1: '小红书',
     4: '快手'
   }
-  const currentPlatform = currentTab.value ? platformMap[currentTab.value.selectedPlatform] : null
+  return platformMap[platformId] || ''
+}
+
+// 根据选择的平台获取可用账号列表
+const availableAccounts = computed(() => {
+  const currentPlatform = currentTab.value ? getPlatformName(currentTab.value.selectedPlatform) : null
   return currentPlatform ? accountStore.accounts.filter(acc => acc.platform === currentPlatform) : []
 })
+
+// 根据平台ID获取该平台的第一个可用账号
+const getFirstAccountForPlatform = (platformId) => {
+  const platformName = getPlatformName(platformId)
+  const accounts = accountStore.accounts.filter(acc => acc.platform === platformName)
+  return accounts.length > 0 ? accounts[0].id : null
+}
+
+// 处理平台切换，自动填充第一个账号
+const handlePlatformChange = (tab) => {
+  const firstAccount = getFirstAccountForPlatform(tab.selectedPlatform)
+  if (firstAccount) {
+    // 清空当前账号列表并添加第一个账号
+    tab.selectedAccounts = [firstAccount]
+  } else {
+    // 如果没有可用账号，清空账号列表
+    tab.selectedAccounts = []
+  }
+}
 
 // 话题相关状态
 const topicDialogVisible = ref(false)
@@ -599,7 +607,7 @@ const customTopic = ref('')
 
 // 推荐话题列表
 const recommendedTopics = [
-  '游戏', '电影', '音乐', '美食', '旅行', '文化',
+  '魔兽世界', '正式服', 'WOW', '游戏', '电影', '音乐', '美食', '旅行', '文化',
   '科技', '生活', '娱乐', '体育', '教育', '艺术',
   '健康', '时尚', '美妆', '摄影', '宠物', '汽车'
 ]
@@ -610,6 +618,8 @@ const addTab = () => {
   const newTab = makeNewTab()
   newTab.name = `tab${tabCounter}`
   newTab.label = `发布${tabCounter}`
+  // 为新tab自动填充第一个账号
+  handlePlatformChange(newTab)
   tabs.push(newTab)
   activeTab.value = newTab.name
 }
@@ -835,21 +845,15 @@ const confirmPublish = async (tab) => {
   }
 }
 
-// 显示上传选项
-const showUploadOptions = (tab) => {
-  currentUploadTab.value = tab
-  uploadOptionsVisible.value = true
-}
-
 // 选择本地上传
-const selectLocalUpload = () => {
-  uploadOptionsVisible.value = false
+const selectLocalUpload = (tab) => {
+  currentUploadTab.value = tab
   localUploadVisible.value = true
 }
 
 // 选择素材库
-const selectMaterialLibrary = async () => {
-  uploadOptionsVisible.value = false
+const selectMaterialLibrary = async (tab) => {
+  currentUploadTab.value = tab
   
   // 如果素材库为空，先获取素材数据
   if (materials.value.length === 0) {
@@ -1211,6 +1215,26 @@ const batchPublish = async () => {
         
         .title-input {
           max-width: 600px;
+        }
+        
+        .upload-options {
+          display: flex;
+          gap: 10px;
+          margin-bottom: 15px;
+          
+          .upload-btn {
+            min-width: 150px;
+          }
+        }
+        
+        .upload-options {
+          display: flex;
+          gap: 10px;
+          margin-bottom: 15px;
+          
+          .upload-btn {
+            min-width: 150px;
+          }
         }
         
         .topic-display {
