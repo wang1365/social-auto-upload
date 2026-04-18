@@ -13,6 +13,9 @@ export const useAppStore = defineStore('app', () => {
 
   // 素材列表数据
   const materials = ref([])
+
+  // 从素材列表跳转到发布中心时暂存的素材
+  const pendingPublishMaterials = ref([])
   
   // 设置账号管理页面已访问
   const setAccountManagementVisited = () => {
@@ -40,6 +43,16 @@ export const useAppStore = defineStore('app', () => {
     materials.value.push(material)
   }
 
+  const setPendingPublishMaterials = (materialList) => {
+    pendingPublishMaterials.value = Array.isArray(materialList) ? [...materialList] : []
+  }
+
+  const consumePendingPublishMaterials = () => {
+    const materialList = [...pendingPublishMaterials.value]
+    pendingPublishMaterials.value = []
+    return materialList
+  }
+
   // 删除素材
   const removeMaterial = (materialId) => {
     const index = materials.value.findIndex(m => m.id === materialId)
@@ -58,11 +71,14 @@ export const useAppStore = defineStore('app', () => {
     isFirstTimeMaterialManagement,
     isAccountRefreshing,
     materials,
+    pendingPublishMaterials,
     setAccountManagementVisited,
     setMaterialManagementVisited,
     resetVisitStatus,
     setMaterials,
     addMaterial,
+    setPendingPublishMaterials,
+    consumePendingPublishMaterials,
     removeMaterial,
     setAccountRefreshing
   }

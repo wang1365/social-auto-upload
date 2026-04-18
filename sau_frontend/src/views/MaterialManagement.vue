@@ -53,6 +53,7 @@
         <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <el-button size="small" @click="handlePreview(row)">预览</el-button>
+            <el-button size="small" type="primary" @click="goToPublish(row)">发布</el-button>
             <el-button size="small" @click="downloadFile(row)">下载</el-button>
             <el-button size="small" type="danger" @click="handleDelete(row)">删除</el-button>
           </template>
@@ -153,11 +154,13 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Upload } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
 
 import { materialApi } from '@/api/material'
 import { useAppStore } from '@/stores/app'
 
 const appStore = useAppStore()
+const router = useRouter()
 
 const searchKeyword = ref('')
 const isRefreshing = ref(false)
@@ -292,6 +295,12 @@ const getPreviewUrl = (filePath) => materialApi.getMaterialPreviewUrl(filePath)
 const downloadFile = (material) => {
   if (!material) return
   window.open(materialApi.downloadMaterial(material.file_path), '_blank')
+}
+
+const goToPublish = async (material) => {
+  if (!material) return
+  appStore.setPendingPublishMaterials([material])
+  await router.push('/publish-center')
 }
 
 const isVideoFile = (filename) =>

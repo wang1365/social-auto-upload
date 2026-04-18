@@ -496,7 +496,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { Upload, Plus, Close, Folder } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAccountStore } from '@/stores/account'
@@ -570,6 +570,20 @@ const makeNewTab = () => {
   } catch (e) {
     return JSON.parse(JSON.stringify(defaultTabInit))
   }
+}
+
+const buildMaterialFileInfo = (material) => ({
+  name: material.filename,
+  url: materialApi.getMaterialPreviewUrl(material.file_path.split('/').pop()),
+  path: material.file_path,
+  size: (material.filesize || 0) * 1024 * 1024,
+  type: 'video/mp4'
+})
+
+const resolveMaterialTitle = (material) => {
+  if (material.video_title_zh) return material.video_title_zh
+  if (material.video_title) return material.video_title
+  return extractChineseTitle(material.filename)
 }
 
 // 账号相关状态
@@ -647,6 +661,53 @@ const tabs = reactive([
   makeNewTab()
 ])
 
+const getActiveTabItem = () => tabs.find(tab => tab.name === activeTab.value) || tabs[0]
+
+const applyMaterialsToTab = (tab, materialList) => {
+  if (!tab || !Array.isArray(materialList) || materialList.length === 0) return 0
+
+  let addedCount = 0
+  materialList.forEach((material) => {
+    if (!material) return
+    const fileInfo = buildMaterialFileInfo(material)
+    const exists = tab.fileList.some(file => file.path === fileInfo.path)
+    if (!exists) {
+      tab.fileList.push(fileInfo)
+      addedCount += 1
+    }
+  })
+
+  tab.displayFileList = [...tab.fileList.map(item => ({
+    name: item.name,
+    url: item.url
+  }))]
+
+  if (!tab.title && materialList[0]) {
+    tab.title = resolveMaterialTitle(materialList[0])
+  }
+
+  return addedCount
+}
+
+const createTab = () => {
+  tabCounter++
+  const newTab = makeNewTab()
+  newTab.name = `tab${tabCounter}`
+  newTab.label = `发布${tabCounter}`
+  handlePlatformChange(newTab)
+  tabs.push(newTab)
+  activeTab.value = newTab.name
+  return newTab
+}
+
+const getOrCreateTargetTab = () => {
+  const currentTabItem = getActiveTabItem()
+  if (currentTabItem && currentTabItem.fileList.length === 0 && !currentTabItem.title) {
+    return currentTabItem
+  }
+  return createTab()
+}
+
 // 初始化第一个tab的账号
 setTimeout(() => {
   handlePlatformChange(tabs[0])
@@ -665,14 +726,7 @@ const recommendedTopics = [
 
 // 添加新tab
 const addTab = () => {
-  tabCounter++
-  const newTab = makeNewTab()
-  newTab.name = `tab${tabCounter}`
-  newTab.label = `发布${tabCounter}`
-  // 为新tab自动填充第一个账号
-  handlePlatformChange(newTab)
-  tabs.push(newTab)
-  activeTab.value = newTab.name
+  createTab()
 }
 
 // 删除tab
@@ -950,51 +1004,11 @@ const confirmMaterialSelection = () => {
   }
   
   if (currentUploadTab.value) {
-    // 将选中的素材添加到当前tab的文件列表
-    selectedMaterials.value.forEach(materialId => {
-      const material = materials.value.find(m => m.id === materialId)
-      if (material) {
-        const fileInfo = {
-          name: material.filename,
-          url: materialApi.getMaterialPreviewUrl(material.file_path.split('/').pop()),
-          path: material.file_path,
-          size: material.filesize * 1024 * 1024, // 转换为字节
-          type: 'video/mp4'
-        }
-        
-        // 检查是否已存在相同文件
-        const exists = currentUploadTab.value.fileList.some(file => file.path === fileInfo.path)
-        if (!exists) {
-          currentUploadTab.value.fileList.push(fileInfo)
-        }
-      }
-    })
-    
-    // 更新显示列表
-    currentUploadTab.value.displayFileList = [...currentUploadTab.value.fileList.map(item => ({
-      name: item.name,
-      url: item.url
-    }))]
-    
-    // 使用素材库中的中文标题填充到表单
-    if (!currentUploadTab.value.title && selectedMaterials.value.length > 0) {
-      const firstMaterial = materials.value.find(m => m.id === selectedMaterials.value[0])
-      if (firstMaterial) {
-        // 优先使用素材库中的中文标题
-        if (firstMaterial.video_title_zh) {
-          currentUploadTab.value.title = firstMaterial.video_title_zh
-        } else if (firstMaterial.video_title) {
-          // 如果没有中文标题，使用原标题
-          currentUploadTab.value.title = firstMaterial.video_title
-        } else {
-          // 如果都没有，再从文件名提取
-          const chineseTitle = extractChineseTitle(firstMaterial.filename)
-          if (chineseTitle) {
-            currentUploadTab.value.title = chineseTitle
-          }
-        }
-      }
-    }
+    const materialList = selectedMaterials.value
+      .map(materialId => materials.value.find(m => m.id === materialId))
+      .filter(Boolean)
+
+    applyMaterialsToTab(currentUploadTab.value, materialList)
   }
   
   const addedCount = selectedMaterials.value.length
@@ -1003,6 +1017,30 @@ const confirmMaterialSelection = () => {
   currentUploadTab.value = null
   ElMessage.success(`已添加 ${addedCount} 个素材`)
 }
+
+onMounted(async () => {
+  const pendingMaterials = appStore.consumePendingPublishMaterials()
+  if (!pendingMaterials.length) return
+
+  try {
+    if (!materials.value.length) {
+      const response = await materialApi.getAllMaterials()
+      appStore.setMaterials(response.data || [])
+    }
+
+    const normalizedMaterials = pendingMaterials.map((pendingMaterial) =>
+      materials.value.find(material => material.id === pendingMaterial.id) || pendingMaterial
+    )
+    const targetTab = getOrCreateTargetTab()
+    const addedCount = applyMaterialsToTab(targetTab, normalizedMaterials)
+    if (addedCount > 0) {
+      ElMessage.success(`已带入 ${addedCount} 个素材到发布页`)
+    }
+  } catch (error) {
+    console.error('处理待发布素材失败:', error)
+    ElMessage.error('带入素材到发布页失败')
+  }
+})
 
 // 批量发布对话框状态
 const batchPublishDialogVisible = ref(false)

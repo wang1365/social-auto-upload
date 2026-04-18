@@ -507,7 +507,7 @@ class DouYinVideo(DouYinBaseUploader):
 
         await asyncio.sleep(1)
         douyin_logger.info(_msg("✍️", "小人开始填标题、描述和话题"))
-        await self.fill_title_and_description(page, self.title, self.desc or self.title, self.tags)
+        await self.fill_title_and_description(page, self.title, self.desc, self.tags)
         douyin_logger.info(_msg("🏷️", f"小人一共贴了 {len(self.tags)} 个话题"))
 
         while True:
