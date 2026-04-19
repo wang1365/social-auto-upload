@@ -13,6 +13,8 @@ export const materialApi = {
 
   deleteMaterial: (id) => http.get(`/deleteFile?id=${id}`),
 
+  deleteMaterials: (ids) => http.post('/deleteFiles', { ids }),
+
   downloadMaterial: (filePath) => `${baseUrl}/download/${filePath}`,
 
   getMaterialPreviewUrl: (filename) => `${baseUrl}/getFile?filename=${encodeURIComponent(filename)}`,

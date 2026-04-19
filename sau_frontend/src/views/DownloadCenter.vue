@@ -6,6 +6,14 @@
         <p>管理 YouTube 下载任务，查看进度、元数据、原始标题和中文标题。</p>
       </div>
       <div class="header-actions">
+        <el-button
+          type="danger"
+          plain
+          :disabled="!selectedDeletableTasks.length"
+          @click="handleBatchDelete"
+        >
+          批量删除
+        </el-button>
         <el-button :loading="loading" @click="fetchTasks(true)">
           <el-icon><Refresh /></el-icon>
           刷新
@@ -33,7 +41,12 @@
     </div>
 
     <div class="table-card">
-      <el-table v-if="filteredTasks.length" :data="filteredTasks">
+      <el-table
+        v-if="filteredTasks.length"
+        :data="filteredTasks"
+        @selection-change="handleSelectionChange"
+      >
+        <el-table-column type="selection" width="52" :selectable="isTaskDeletable" />
         <el-table-column prop="taskId" label="任务 ID" min-width="220" show-overflow-tooltip />
         <el-table-column label="标题" min-width="260">
           <template #default="{ row }">
@@ -95,7 +108,7 @@
         </el-table-column>
         <el-table-column prop="filename" label="本地文件" min-width="220" show-overflow-tooltip />
         <el-table-column prop="updatedAt" label="更新时间" width="180" />
-        <el-table-column label="操作" width="280" fixed="right">
+        <el-table-column label="操作" width="340" fixed="right">
           <template #default="{ row }">
             <el-button size="small" @click="openTaskDetail(row)">详情</el-button>
             <el-button
@@ -105,6 +118,14 @@
               @click="openTaskDetail(row, true)"
             >
               播放
+            </el-button>
+            <el-button
+              v-if="row.status === 'success' && row.materialId"
+              size="small"
+              type="success"
+              @click="goToPublish(row)"
+            >
+              发布
             </el-button>
             <el-button
               size="small"
@@ -285,14 +306,16 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
 
 import { downloadApi } from '@/api/download'
 import { materialApi } from '@/api/material'
 import { useAppStore } from '@/stores/app'
 
 const appStore = useAppStore()
+const router = useRouter()
 const loading = ref(false)
 const creating = ref(false)
 const createDialogVisible = ref(false)
@@ -304,6 +327,7 @@ const selectedTask = ref(null)
 const createForm = ref({ url: '' })
 const activePlaybackTab = ref('source')
 const latestMaterialSignature = ref('')
+const selectedDeletableTasks = ref([])
 let pollTimer = null
 
 const filteredTasks = computed(() => {
@@ -421,6 +445,12 @@ const syncMaterials = async () => {
   appStore.setMaterials(response.data || [])
 }
 
+const isTaskDeletable = (task) => task?.status === 'success' && Boolean(task?.materialId)
+
+const handleSelectionChange = (selection) => {
+  selectedDeletableTasks.value = selection.filter(isTaskDeletable)
+}
+
 const schedulePolling = () => {
   stopPolling()
   if (!hasActiveTasks.value) return
@@ -443,6 +473,9 @@ const fetchTasks = async (showMessage = false) => {
       const current = tasks.value.find((item) => item.taskId === selectedTask.value.taskId)
       if (current) {
         selectedTask.value = current
+      } else {
+        selectedTask.value = null
+        detailVisible.value = false
       }
     }
     if (showMessage) ElMessage.success('下载列表已刷新')
@@ -452,6 +485,51 @@ const fetchTasks = async (showMessage = false) => {
   } finally {
     loading.value = false
     schedulePolling()
+  }
+}
+
+const goToPublish = async (task) => {
+  if (!task?.materialId) {
+    ElMessage.warning('当前任务还没有生成可发布素材')
+    return
+  }
+
+  let material = appStore.materials.find((item) => item.id === task.materialId)
+  if (!material) {
+    await syncMaterials()
+    material = appStore.materials.find((item) => item.id === task.materialId)
+  }
+  if (!material) {
+    ElMessage.error('未找到对应素材，请先刷新列表后重试')
+    return
+  }
+
+  appStore.setPendingPublishMaterials([material])
+  await router.push('/publish-center')
+}
+
+const handleBatchDelete = async () => {
+  const ids = selectedDeletableTasks.value
+    .map((task) => Number(task.materialId))
+    .filter((id) => Number.isInteger(id) && id > 0)
+  if (!ids.length) {
+    ElMessage.warning('请先选择已下载完成的素材任务')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(`确认批量删除已选中的 ${ids.length} 个下载素材吗？`, '提示', {
+      type: 'warning',
+    })
+    await materialApi.deleteMaterials(ids)
+    await syncMaterials()
+    await fetchTasks()
+    selectedDeletableTasks.value = []
+    ElMessage.success('批量删除成功')
+  } catch (error) {
+    if (error === 'cancel' || error?.message === 'cancel') return
+    console.error(error)
+    ElMessage.error(error.message || '批量删除失败')
   }
 }
 

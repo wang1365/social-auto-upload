@@ -262,6 +262,22 @@ def create_material_record(
         return cursor.lastrowid
 
 
+def delete_material_record(conn, file_id):
+    record = conn.execute("SELECT * FROM file_records WHERE id = ?", (file_id,)).fetchone()
+    if not record:
+        return None
+
+    record = dict(record)
+    relative_path = record.get("file_path") or ""
+    if relative_path:
+        file_path = VIDEO_DIR / relative_path
+        if file_path.exists():
+            file_path.unlink()
+
+    conn.execute("DELETE FROM file_records WHERE id = ?", (file_id,))
+    return {"id": record["id"], "filename": record["filename"]}
+
+
 def update_youtube_task(task_id, **kwargs):
     with youtube_task_lock:
         task = youtube_tasks.get(task_id)
@@ -744,22 +760,54 @@ def delete_file():
 
     try:
         with db_connection() as conn:
-            record = conn.execute("SELECT * FROM file_records WHERE id = ?", (file_id,)).fetchone()
-            if not record:
+            deleted_record = delete_material_record(conn, int(file_id))
+            if not deleted_record:
                 return jsonify({"code": 404, "msg": "File not found", "data": None}), 404
-            record = dict(record)
-            file_path = VIDEO_DIR / record["file_path"]
-            if file_path.exists():
-                file_path.unlink()
-            conn.execute("DELETE FROM file_records WHERE id = ?", (file_id,))
             conn.commit()
         return jsonify({
             "code": 200,
             "msg": "File deleted successfully",
-            "data": {"id": record["id"], "filename": record["filename"]},
+            "data": deleted_record,
         }), 200
     except Exception:
         return jsonify({"code": 500, "msg": "delete failed!", "data": None}), 500
+
+
+@app.route("/deleteFiles", methods=["POST"])
+def delete_files():
+    data = request.get_json(silent=True) or {}
+    ids = data.get("ids")
+    if not isinstance(ids, list):
+        return jsonify({"code": 400, "msg": "ids must be a list", "data": None}), 400
+
+    valid_ids = []
+    for item in ids:
+        try:
+            valid_ids.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    valid_ids = list(dict.fromkeys(valid_ids))
+    if not valid_ids:
+        return jsonify({"code": 400, "msg": "No valid file IDs provided", "data": None}), 400
+
+    try:
+        deleted_items = []
+        missing_ids = []
+        with db_connection() as conn:
+            for file_id in valid_ids:
+                deleted_record = delete_material_record(conn, file_id)
+                if deleted_record:
+                    deleted_items.append(deleted_record)
+                else:
+                    missing_ids.append(file_id)
+            conn.commit()
+        return jsonify({
+            "code": 200,
+            "msg": "Files deleted successfully",
+            "data": {"deleted": deleted_items, "missingIds": missing_ids},
+        }), 200
+    except Exception as exc:
+        return jsonify({"code": 500, "msg": f"delete failed: {exc}", "data": None}), 500
 
 
 @app.route("/deleteAccount", methods=["GET"])

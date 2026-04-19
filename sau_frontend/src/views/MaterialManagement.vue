@@ -12,6 +12,14 @@
         placeholder="搜索文件名、原标题、中文标题、来源"
       />
       <div class="toolbar-actions">
+        <el-button
+          type="danger"
+          plain
+          :disabled="!selectedMaterials.length"
+          @click="handleBatchDelete"
+        >
+          批量删除
+        </el-button>
         <el-button type="primary" @click="openUploadDialog">
           <el-icon><Upload /></el-icon>
           上传素材
@@ -24,7 +32,12 @@
     </div>
 
     <div class="table-card">
-      <el-table v-if="filteredMaterials.length" :data="filteredMaterials">
+      <el-table
+        v-if="filteredMaterials.length"
+        :data="filteredMaterials"
+        @selection-change="handleSelectionChange"
+      >
+        <el-table-column type="selection" width="52" />
         <el-table-column prop="uuid" label="UUID" width="180" />
         <el-table-column prop="filename" label="文件名" min-width="240" show-overflow-tooltip />
         <el-table-column label="来源" width="120">
@@ -171,6 +184,7 @@ const fileList = ref([])
 const customFilename = ref('')
 const uploadProgress = ref({})
 const currentMaterial = ref(null)
+const selectedMaterials = ref([])
 
 const filteredMaterials = computed(() => {
   const keyword = searchKeyword.value.trim().toLowerCase()
@@ -277,6 +291,15 @@ const handlePreview = (material) => {
   previewDialogVisible.value = true
 }
 
+const handleSelectionChange = (selection) => {
+  selectedMaterials.value = selection
+}
+
+const removeMaterialsFromStore = (materialIds) => {
+  if (!materialIds.length) return
+  appStore.setMaterials(appStore.materials.filter((material) => !materialIds.includes(material.id)))
+}
+
 const handleDelete = async (material) => {
   try {
     await ElMessageBox.confirm(`确认删除素材 ${material.filename} 吗？`, '提示', { type: 'warning' })
@@ -287,6 +310,29 @@ const handleDelete = async (material) => {
     if (error === 'cancel' || error?.message === 'cancel') return
     console.error(error)
     ElMessage.error(error.message || '删除失败')
+  }
+}
+
+const handleBatchDelete = async () => {
+  const ids = selectedMaterials.value.map((material) => material.id)
+  if (!ids.length) {
+    ElMessage.warning('请先选择要删除的素材')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(`确认批量删除已选中的 ${ids.length} 个素材吗？`, '提示', {
+      type: 'warning',
+    })
+    const response = await materialApi.deleteMaterials(ids)
+    const deletedIds = (response.data?.deleted || []).map((item) => item.id)
+    removeMaterialsFromStore(deletedIds.length ? deletedIds : ids)
+    selectedMaterials.value = []
+    ElMessage.success('批量删除成功')
+  } catch (error) {
+    if (error === 'cancel' || error?.message === 'cancel') return
+    console.error(error)
+    ElMessage.error(error.message || '批量删除失败')
   }
 }
 
