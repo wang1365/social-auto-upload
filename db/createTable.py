@@ -45,6 +45,7 @@ for column_name, column_type in [
     ("video_title", "TEXT"),
     ("video_title_zh", "TEXT"),
     ("video_description", "TEXT"),
+    ("subtitle_path", "TEXT"),
 ]:
     if column_name not in columns:
         cursor.execute(f"ALTER TABLE file_records ADD COLUMN {column_name} {column_type}")

@@ -1,5 +1,7 @@
 import re
 import logging
+import shutil
+import subprocess
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -121,6 +123,26 @@ PRIMARY_FORMAT = (
 FALLBACK_FORMAT = "best/bv*+ba"
 
 
+def pick_best_subtitle_language(available_languages: list[str]) -> str | None:
+    if not available_languages:
+        return None
+    normalized = [lang for lang in available_languages if lang and lang != "live_chat"]
+    if not normalized:
+        return None
+
+    preferred_exact = ["zh-Hans", "zh-CN", "zh", "en-US", "en-GB", "en"]
+    for candidate in preferred_exact:
+        if candidate in normalized:
+            return candidate
+    for candidate in normalized:
+        if candidate.lower().startswith("zh"):
+            return candidate
+    for candidate in normalized:
+        if candidate.lower().startswith("en"):
+            return candidate
+    return normalized[0]
+
+
 def extract_video_metadata(url: str, proxy: str | None = None, cookiefile: str | None = None) -> dict:
     options = build_ytdlp_options(
         proxy,
@@ -150,7 +172,8 @@ def download_video(
     progress_callback=None,
     proxy: str | None = None,
     cookiefile: str | None = None,
-) -> Path:
+    download_subtitles: bool = True,
+) -> tuple[Path, Path | None]:
     output_dir.mkdir(parents=True, exist_ok=True)
     template = str(output_dir / f"{filename_stem}.%(ext)s")
 
@@ -195,12 +218,27 @@ def download_video(
             proxy,
             cookiefile=cookiefile,
             quiet=True,
+            no_warnings=True,
             noplaylist=True,
             merge_output_format="mp4",
             outtmpl=template,
             format=format_selector,
+            retries=5,
+            fragment_retries=5,
+            extractor_retries=3,
+            sleep_interval_requests=1,
             progress_hooks=[progress_hook],
         )
+        if download_subtitles:
+            options.update(
+                {
+                    "writesubtitles": True,
+                    "writeautomaticsub": True,
+                    # Avoid requesting every language track (can trigger 429 on Shorts).
+                    "subtitleslangs": ["zh-Hans", "zh-CN", "zh", "en-US", "en-GB", "en", "-live_chat"],
+                    "subtitlesformat": "srt/vtt/best",
+                }
+            )
 
         ytdlp_logger.info("开始下载 YouTube 视频: %s", url)
         ytdlp_logger.info("yt-dlp 配置参数: %s", options)
@@ -230,4 +268,97 @@ def download_video(
     if final_path.stat().st_size == 0:
         raise DownloadError("downloaded file is empty")
 
-    return final_path
+    subtitle_path = None
+    if isinstance(result, dict):
+        requested_subtitles = result.get("requested_subtitles") or {}
+        for subtitle in requested_subtitles.values():
+            if isinstance(subtitle, dict):
+                filepath = subtitle.get("filepath")
+                if filepath:
+                    candidate = Path(filepath)
+                    if candidate.exists():
+                        subtitle_path = candidate
+                        break
+
+    # If subtitle is still missing, download only one best available subtitle track.
+    if download_subtitles and subtitle_path is None and isinstance(result, dict):
+        subtitles_dict = result.get("subtitles") or {}
+        auto_subtitles_dict = result.get("automatic_captions") or {}
+        available_languages = list(dict.fromkeys([*subtitles_dict.keys(), *auto_subtitles_dict.keys()]))
+        selected_lang = pick_best_subtitle_language(available_languages)
+        if selected_lang:
+            subtitle_only_options = build_ytdlp_options(
+                proxy,
+                cookiefile=cookiefile,
+                quiet=True,
+                no_warnings=True,
+                skip_download=True,
+                noplaylist=True,
+                outtmpl=template,
+                writesubtitles=True,
+                writeautomaticsub=True,
+                subtitleslangs=[selected_lang, "-live_chat"],
+                subtitlesformat="srt/vtt/best",
+                retries=5,
+                fragment_retries=5,
+                extractor_retries=3,
+                sleep_interval_requests=1,
+            )
+            try:
+                with YoutubeDL(subtitle_only_options) as ydl:
+                    ydl.extract_info(url, download=True)
+            except DownloadError:
+                pass
+
+    if subtitle_path is None:
+        subtitle_candidates = sorted(
+            [path for path in output_dir.glob(f"{filename_stem}*") if path.suffix.lower() in {".srt", ".vtt", ".ass", ".ttml", ".sbv"}],
+            key=lambda path: (0 if path.suffix.lower() == ".srt" else 1, -path.stat().st_mtime),
+        )
+        if subtitle_candidates:
+            subtitle_path = subtitle_candidates[0]
+
+    return final_path, subtitle_path
+
+
+def embed_subtitle_into_video(video_path: Path, subtitle_path: Path) -> Path:
+    if not video_path.exists():
+        raise FileNotFoundError(f"video file not found: {video_path}")
+    if not subtitle_path.exists():
+        raise FileNotFoundError(f"subtitle file not found: {subtitle_path}")
+
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        raise RuntimeError("ffmpeg is required for subtitle embedding")
+
+    output_path = video_path.with_name(f"{video_path.stem}.subtitled{video_path.suffix}")
+    command = [
+        ffmpeg_bin,
+        "-y",
+        "-i",
+        str(video_path),
+        "-i",
+        str(subtitle_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-map",
+        "1:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "copy",
+        "-c:s",
+        "mov_text",
+        "-metadata:s:s:0",
+        "language=chi",
+        "-disposition:s:0",
+        "default",
+        str(output_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0 or not output_path.exists():
+        stderr = (result.stderr or "").strip()
+        raise RuntimeError(f"ffmpeg subtitle embedding failed: {stderr[:400]}")
+    return output_path

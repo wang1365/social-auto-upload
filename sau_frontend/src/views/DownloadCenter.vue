@@ -155,6 +155,14 @@
             placeholder="请输入单个 YouTube 视频链接"
           />
         </el-form-item>
+        <el-form-item label="字幕">
+          <el-switch
+            v-model="createForm.downloadSubtitles"
+            inline-prompt
+            active-text="开"
+            inactive-text="关"
+          />
+        </el-form-item>
       </el-form>
 
       <el-alert
@@ -243,8 +251,9 @@
         <div class="detail-section">
           <div class="section-title">视频播放</div>
           <el-tabs v-model="activePlaybackTab">
-            <el-tab-pane v-if="youtubeEmbedUrl" label="源视频" name="source">
+            <el-tab-pane label="源视频" name="source">
               <iframe
+                v-if="youtubeEmbedUrl"
                 class="source-player"
                 :src="youtubeEmbedUrl"
                 title="YouTube Source Player"
@@ -252,23 +261,40 @@
                 referrerpolicy="strict-origin-when-cross-origin"
                 allowfullscreen
               />
+              <el-empty v-else description="当前无可播放源视频" />
             </el-tab-pane>
-            <el-tab-pane
-              v-if="selectedTask.filePath && isVideoFile(selectedTask.filename || selectedTask.filePath)"
-              label="已下载视频"
-              name="local"
-            >
+            <el-tab-pane label="已下载视频" name="local">
               <video
+                v-if="selectedTask.filePath && isVideoFile(selectedTask.filename || selectedTask.filePath)"
                 controls
                 class="video-player"
                 :src="materialApi.getMaterialPreviewUrl(selectedTask.filePath)"
               />
+              <el-empty v-else description="当前无已下载视频文件" />
+            </el-tab-pane>
+            <el-tab-pane label="字幕" name="subtitle">
+              <div v-if="selectedTask.subtitleText" class="subtitle-box">{{ selectedTask.subtitleText }}</div>
+              <el-empty v-else description="当前任务无可展示字幕" />
+              <div class="detail-actions">
+                <el-button
+                  v-if="selectedTask.subtitleText"
+                  text
+                  type="primary"
+                  @click="copyText(selectedTask.subtitleText, '字幕已复制')"
+                >
+                  复制字幕
+                </el-button>
+                <el-button
+                  v-if="selectedTask.subtitleFilePath"
+                  text
+                  type="primary"
+                  @click="downloadSubtitle(selectedTask.subtitleFilePath)"
+                >
+                  下载字幕文件
+                </el-button>
+              </div>
             </el-tab-pane>
           </el-tabs>
-          <el-empty
-            v-if="!youtubeEmbedUrl && !(selectedTask.filePath && isVideoFile(selectedTask.filename || selectedTask.filePath))"
-            description="当前没有可播放的视频源"
-          />
         </div>
 
         <div v-if="selectedTask.errorMessage" class="detail-section error-panel">
@@ -324,7 +350,7 @@ const searchKeyword = ref('')
 const statusFilter = ref('all')
 const tasks = ref([])
 const selectedTask = ref(null)
-const createForm = ref({ url: '' })
+const createForm = ref({ url: '', downloadSubtitles: true })
 const activePlaybackTab = ref('source')
 const latestMaterialSignature = ref('')
 const selectedDeletableTasks = ref([])
@@ -472,7 +498,10 @@ const fetchTasks = async (showMessage = false) => {
     if (selectedTask.value) {
       const current = tasks.value.find((item) => item.taskId === selectedTask.value.taskId)
       if (current) {
-        selectedTask.value = current
+        selectedTask.value = {
+          ...current,
+          subtitleText: current.subtitleText || selectedTask.value.subtitleText || '',
+        }
       } else {
         selectedTask.value = null
         detailVisible.value = false
@@ -539,7 +568,7 @@ const openCreateDialog = () => {
 }
 
 const resetCreateForm = () => {
-  createForm.value = { url: '' }
+  createForm.value = { url: '', downloadSubtitles: true }
 }
 
 const createDownloadTask = async () => {
@@ -550,7 +579,10 @@ const createDownloadTask = async () => {
   }
   creating.value = true
   try {
-    const response = await downloadApi.createYoutubeDownloadTask(url)
+    const response = await downloadApi.createYoutubeDownloadTask(
+      url,
+      createForm.value.downloadSubtitles !== false
+    )
     createDialogVisible.value = false
     await fetchTasks()
     const createdTask = await downloadApi.getYoutubeTask(response.data.taskId)
@@ -572,7 +604,10 @@ const retryDownload = async (task) => {
   }
   creating.value = true
   try {
-    const response = await downloadApi.createYoutubeDownloadTask(task.sourceUrl)
+    const response = await downloadApi.createYoutubeDownloadTask(
+      task.sourceUrl,
+      task.downloadSubtitles !== false
+    )
     await fetchTasks()
     const createdTask = await downloadApi.getYoutubeTask(response.data.taskId)
     selectedTask.value = createdTask.data
@@ -608,6 +643,11 @@ const isVideoFile = (filename) =>
   ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.mkv', '.webm'].some((ext) =>
     (filename || '').toLowerCase().endsWith(ext)
   )
+
+const downloadSubtitle = (subtitlePath) => {
+  if (!subtitlePath) return
+  window.open(materialApi.downloadMaterial(subtitlePath), '_blank')
+}
 
 onMounted(() => {
   fetchTasks()
@@ -774,6 +814,17 @@ onBeforeUnmount(() => {
   line-height: 1.6;
   border-radius: 8px;
   background: #fff;
+}
+
+.subtitle-box {
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  line-height: 1.6;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f7f8fa;
+  border: 1px solid #ebeef5;
 }
 
 .progress-panel {

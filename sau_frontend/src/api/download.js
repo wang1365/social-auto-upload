@@ -5,5 +5,6 @@ export const downloadApi = {
 
   getYoutubeTask: (taskId) => http.get('/youtube/task', { taskId }),
 
-  createYoutubeDownloadTask: (url) => http.post('/youtube/download', { url }),
+  createYoutubeDownloadTask: (url, downloadSubtitles = true) =>
+    http.post('/youtube/download', { url, downloadSubtitles }),
 }

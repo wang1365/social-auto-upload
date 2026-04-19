@@ -25,10 +25,11 @@ from myUtils.postVideo import (
     post_video_tencent,
     post_video_xhs,
 )
-from myUtils.translation import translate_title_to_zh
+from myUtils.translation import translate_subtitle_file_to_zh, translate_title_to_zh
 from myUtils.youtube_downloader import (
     classify_ytdlp_error,
     download_video,
+    embed_subtitle_into_video,
     extract_video_metadata,
     is_playlist_url,
     is_valid_proxy_url,
@@ -96,6 +97,7 @@ def ensure_runtime_schema():
             ("video_title", "TEXT"),
             ("video_title_zh", "TEXT"),
             ("video_description", "TEXT"),
+            ("subtitle_path", "TEXT"),
         ]:
             if column_name not in columns:
                 cursor.execute(f"ALTER TABLE file_records ADD COLUMN {column_name} {column_type}")
@@ -151,6 +153,9 @@ def build_persisted_youtube_task(row):
         "video_title": row_dict.get("video_title"),
         "video_title_zh": row_dict.get("video_title_zh"),
         "video_description": row_dict.get("video_description"),
+        "download_subtitles": bool(row_dict.get("subtitle_path")),
+        "subtitle_file_path": row_dict.get("subtitle_path"),
+        "subtitle_text": None,
         "filename": row_dict.get("filename"),
         "file_path": row_dict.get("file_path"),
         "created_at": created_at,
@@ -238,14 +243,15 @@ def create_material_record(
     video_title=None,
     video_title_zh=None,
     video_description=None,
+    subtitle_path=None,
 ):
     with db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
             INSERT INTO file_records (
-                filename, filesize, file_path, source_url, source_type, video_title, video_title_zh, video_description
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                filename, filesize, file_path, source_url, source_type, video_title, video_title_zh, video_description, subtitle_path
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 filename,
@@ -256,6 +262,7 @@ def create_material_record(
                 video_title,
                 video_title_zh,
                 video_description,
+                subtitle_path,
             ),
         )
         conn.commit()
@@ -273,6 +280,11 @@ def delete_material_record(conn, file_id):
         file_path = VIDEO_DIR / relative_path
         if file_path.exists():
             file_path.unlink()
+    subtitle_relative_path = record.get("subtitle_path") or ""
+    if subtitle_relative_path:
+        subtitle_path = VIDEO_DIR / subtitle_relative_path
+        if subtitle_path.exists():
+            subtitle_path.unlink()
 
     conn.execute("DELETE FROM file_records WHERE id = ?", (file_id,))
     return {"id": record["id"], "filename": record["filename"]}
@@ -286,7 +298,30 @@ def update_youtube_task(task_id, **kwargs):
             task["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def serialize_youtube_task(task):
+def read_subtitle_text(relative_path: str | None) -> str:
+    if not relative_path:
+        return ""
+    try:
+        subtitle_path = safe_relative_file(VIDEO_DIR, relative_path)
+    except ValueError:
+        return ""
+    if not subtitle_path.exists() or not subtitle_path.is_file():
+        return ""
+
+    for encoding in ("utf-8-sig", "utf-8", "gb18030", "latin-1"):
+        try:
+            return subtitle_path.read_text(encoding=encoding).strip()
+        except UnicodeDecodeError:
+            continue
+        except OSError:
+            return ""
+    return ""
+
+
+def serialize_youtube_task(task, include_subtitle_text=False):
+    subtitle_text = task.get("subtitle_text") or ""
+    if include_subtitle_text and not subtitle_text:
+        subtitle_text = read_subtitle_text(task.get("subtitle_file_path"))
     return {
         "taskId": task["task_id"],
         "status": task["status"],
@@ -306,6 +341,9 @@ def serialize_youtube_task(task):
         "videoTitle": task.get("video_title"),
         "videoTitleZh": task.get("video_title_zh"),
         "videoDescription": task.get("video_description"),
+        "downloadSubtitles": task.get("download_subtitles", True),
+        "subtitleFilePath": task.get("subtitle_file_path"),
+        "subtitleText": subtitle_text if include_subtitle_text else None,
         "filename": task.get("filename"),
         "filePath": task.get("file_path"),
         "createdAt": task.get("created_at"),
@@ -354,7 +392,7 @@ def extract_progress_fields(status):
     }
 
 
-def process_youtube_download(task_id, url):
+def process_youtube_download(task_id, url, download_subtitles=True):
     try:
         proxy = get_system_setting("download_proxy", "").strip()
         if proxy and not is_valid_proxy_url(proxy):
@@ -403,14 +441,55 @@ def process_youtube_download(task_id, url):
                 **progress_fields,
             )
 
-        final_path = download_video(
+        final_path, subtitle_path = download_video(
             url,
             VIDEO_DIR,
             filename_stem,
             on_progress,
             proxy=proxy or None,
             cookiefile=str(cookie_path) if cookie_path else None,
+            download_subtitles=download_subtitles,
         )
+        translated_subtitle_path = None
+        if download_subtitles and subtitle_path:
+            try:
+                update_youtube_task(
+                    task_id,
+                    status="downloading",
+                    phase="processing",
+                    progress_text="Translating subtitles",
+                )
+                translated_subtitle_path = translate_subtitle_file_to_zh(subtitle_path)
+            except Exception:
+                translated_subtitle_path = subtitle_path
+
+        subtitle_output_path = translated_subtitle_path or subtitle_path
+        if (
+            subtitle_path
+            and subtitle_output_path
+            and subtitle_output_path != subtitle_path
+            and subtitle_path.exists()
+        ):
+            subtitle_path.unlink()
+
+        if download_subtitles and subtitle_output_path and final_path.suffix.lower() == ".mp4":
+            try:
+                update_youtube_task(
+                    task_id,
+                    status="downloading",
+                    phase="processing",
+                    progress_text="Embedding translated subtitles",
+                )
+                original_video_path = final_path
+                embedded_video_path = embed_subtitle_into_video(final_path, subtitle_output_path)
+                final_path = embedded_video_path
+                if original_video_path.exists() and original_video_path != embedded_video_path:
+                    original_video_path.unlink()
+            except Exception:
+                pass
+
+        subtitle_filename = subtitle_output_path.name if subtitle_output_path else None
+        subtitle_text = read_subtitle_text(subtitle_filename)
         filesize_mb = round(final_path.stat().st_size / (1024 * 1024), 2)
         material_id = create_material_record(
             filename=final_path.name,
@@ -421,6 +500,7 @@ def process_youtube_download(task_id, url):
             video_title=metadata.get("title") or final_path.stem,
             video_title_zh=translated_title,
             video_description=metadata.get("description") or "",
+            subtitle_path=subtitle_filename,
         )
         update_youtube_task(
             task_id,
@@ -431,6 +511,8 @@ def process_youtube_download(task_id, url):
             material_id=material_id,
             filename=final_path.name,
             file_path=final_path.name,
+            subtitle_file_path=subtitle_filename,
+            subtitle_text=subtitle_text,
             error_code=None,
             error_message=None,
             error_detail=None,
@@ -572,6 +654,11 @@ def upload_save():
 def youtube_download():
     data = request.get_json(silent=True) or {}
     url = (data.get("url") or "").strip()
+    download_subtitles = data.get("downloadSubtitles", True)
+    if isinstance(download_subtitles, str):
+        download_subtitles = download_subtitles.strip().lower() not in {"0", "false", "off", "no"}
+    else:
+        download_subtitles = bool(download_subtitles)
     if not url:
         return jsonify({"code": 400, "msg": "Video URL is required", "data": None}), 400
     if not is_supported_youtube_url(url):
@@ -600,13 +687,20 @@ def youtube_download():
             "video_title": None,
             "video_title_zh": None,
             "video_description": None,
+            "download_subtitles": download_subtitles,
+            "subtitle_file_path": None,
+            "subtitle_text": None,
             "filename": None,
             "file_path": None,
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
 
-    thread = threading.Thread(target=process_youtube_download, args=(task_id, url), daemon=True)
+    thread = threading.Thread(
+        target=process_youtube_download,
+        args=(task_id, url, download_subtitles),
+        daemon=True,
+    )
     thread.start()
     return jsonify({"code": 200, "msg": "success", "data": {"taskId": task_id}}), 200
 
@@ -620,7 +714,7 @@ def youtube_task():
         task = youtube_tasks.get(task_id)
         if not task:
             return jsonify({"code": 404, "msg": "Task not found", "data": None}), 404
-        payload = serialize_youtube_task(dict(task))
+        payload = serialize_youtube_task(dict(task), include_subtitle_text=True)
     return jsonify({"code": 200, "msg": "success", "data": payload}), 200
 
 
