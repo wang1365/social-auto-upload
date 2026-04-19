@@ -1,134 +1,128 @@
-# Vue3 + Vite 项目
+# social-flow 前端
 
-一个基于 Vue3、Vite、Element Plus、Pinia、Vue Router 和 Axios 的现代化前端项目模板。
+`sau_frontend` 是 `social-flow` 的管理后台前端，基于 `Vue 3`、`Vite`、`Element Plus`、`Pinia` 和 `Vue Router` 构建，用于统一管理账号、素材、下载任务和多平台发布流程。
 
-## 🚀 特性
+## 项目目标
 
-- ⚡️ **Vite** - 极速的构建工具
-- 🖖 **Vue 3** - 渐进式 JavaScript 框架
-- 🎨 **Element Plus** - 基于 Vue 3 的组件库
-- 🗂 **Vue Router** - 官方路由管理器（WebHash 模式）
-- 📦 **Pinia** - 新一代状态管理
-- 🔗 **Axios** - HTTP 请求库（已封装）
-- 🎯 **Sass** - CSS 预处理器
-- 📁 **规范化目录结构** - views 存放页面，components 存放组件
-- 🔧 **完整配置** - 包含开发和生产环境配置
+- 面向自媒体自动化流程的学习、演示与交流。
+- 用于梳理素材下载、素材管理和多平台发布的前后端协作方式。
+- 仅用于学习交流，请勿用于违反平台规则或相关法律法规的用途。
 
-## 📦 安装
+## 功能概览
+
+- 仪表盘：展示账号数量、平台接入情况、素材统计和最近上传素材。
+- 账号管理：管理不同平台的发布账号。
+- 素材管理：查看、预览、下载、删除素材，并支持一键带入发布中心。
+- 下载中心：创建 YouTube 下载任务，支持代理下载，查看下载进度、播放结果视频、字幕和任务详情。
+- 发布中心：支持本地上传或从素材库选择素材，配置标题、话题、定时发布和平台账号。
+- 系统配置：管理 YouTube 下载代理和 Cookie 文件。
+
+## 最近更新
+
+### 2026-04-19
+
+- 下载中心新增字幕开关，可在创建 YouTube 下载任务时选择是否下载字幕。
+- YouTube 下载流程支持通过系统配置中的代理进行访问。
+- 下载任务详情新增字幕页签，支持直接查看字幕内容、复制字幕文本、下载字幕文件。
+- 下载中心新增“重新下载”操作，可基于原始链接快速重建任务。
+- 下载完成后会自动同步素材库，减少发布中心和素材管理页的数据不一致问题。
+- 素材管理页新增“发布”按钮，可将单条素材直接带入发布中心。
+- 发布中心支持接收“待发布素材”，自动填充素材文件和标题。
+- 发布中心的平台选择改为多选，可一次发布到多个平台。
+- 发布中心会按平台自动匹配默认账号，并支持统一打开账号选择弹窗。
+- 从素材库选取素材或本地上传文件后，会优先使用中文标题/原标题自动填充标题字段。
+
+### 2026-04-18
+
+- 发布中心优化素材选择弹窗展示，优先显示中文标题，并补充原标题信息。
+- 发布中心支持从文件名中提取中文标题，减少手工录入标题的成本。
+- 多平台发布场景下，视频号草稿选项和抖音商品链接配置会按所选平台动态显示。
+
+## 页面说明
+
+### 仪表盘
+
+- 聚合账号、平台和素材统计信息。
+- 显示最近上传的素材列表，便于快速回看。
+
+### 素材管理
+
+- 支持素材搜索、预览、下载、删除。
+- 支持将素材直接发送到发布中心继续发布。
+
+### 下载中心
+
+- 支持创建 YouTube 视频下载任务。
+- 支持通过系统配置中的代理执行 YouTube 下载。
+- 支持选择是否同时下载字幕。
+- 支持查看源视频、已下载视频和字幕内容。
+- 支持失败或已完成任务的重新下载。
+
+### 发布中心
+
+- 支持本地上传和素材库选材两种方式。
+- 支持多 Tab 并行编辑多个发布任务。
+- 支持抖音、小红书、快手、视频号等平台的多选发布。
+- 支持账号选择、话题配置、原创声明、商品链接、定时发布等能力。
+
+### 系统配置
+
+- 支持配置 YouTube 下载代理。
+- 支持上传和清理 YouTube `cookies.txt` 文件。
+
+## 本地开发
 
 ```bash
-# 安装依赖
 npm install
-
-# 启动开发服务器
 npm run dev
+```
 
-# 构建生产版本
+默认开发端口为 `5173`。
+
+## 构建
+
+```bash
 npm run build
-
-# 预览生产构建
 npm run preview
 ```
 
-## 📁 项目结构
+## 环境变量
 
+### `.env.development`
+
+- `VITE_API_BASE_URL=/api`
+- `VITE_PORT=5173`
+- `VITE_USE_MOCK=true`
+
+### `.env.production`
+
+- `VITE_API_BASE_URL=http://localhost:5409`
+- `VITE_USE_MOCK=false`
+
+## 技术栈
+
+- `Vue 3`
+- `Vite`
+- `Element Plus`
+- `Pinia`
+- `Vue Router`
+- `Axios`
+- `Sass`
+
+## 目录结构
+
+```text
+sau_frontend/
+├─ src/
+│  ├─ api/                 # 前端接口封装
+│  ├─ components/          # 公共组件
+│  ├─ router/              # 路由配置
+│  ├─ stores/              # Pinia 状态管理
+│  ├─ styles/              # 全局样式
+│  ├─ views/               # 页面视图
+│  ├─ App.vue              # 应用布局
+│  └─ main.js              # 入口文件
+├─ public/                 # 静态资源
+├─ package.json
+└─ vite.config.js
 ```
-src/
-├── api/                 # API 接口
-│   ├── index.js        # API 统一导出
-│   └── user.js         # 用户相关 API
-├── components/          # 公共组件
-│   └── HelloWorld.vue  # 示例组件
-├── router/             # 路由配置
-│   └── index.js        # 路由主文件
-├── stores/             # 状态管理
-│   ├── index.js        # Pinia 配置
-│   └── user.js         # 用户状态
-├── styles/             # 样式文件
-│   ├── index.scss      # 主样式文件
-│   ├── reset.scss      # 重置样式
-│   └── variables.scss  # 样式变量
-├── utils/              # 工具函数
-│   └── request.js      # HTTP 请求封装
-├── views/              # 页面组件
-│   ├── Home.vue        # 首页
-│   └── About.vue       # 关于页面
-├── App.vue             # 根组件
-└── main.js             # 入口文件
-```
-
-## 🔧 配置说明
-
-### 环境变量
-
-- `.env` - 通用环境变量
-- `.env.development` - 开发环境变量
-- `.env.production` - 生产环境变量
-
-### 路由配置
-
-项目使用 Vue Router 4，配置为 WebHash 模式，路由文件位于 `src/router/index.js`。
-
-### 状态管理
-
-使用 Pinia 进行状态管理，store 文件位于 `src/stores/` 目录。
-
-### HTTP 请求
-
-Axios 已经过封装，包含：
-- 请求/响应拦截器
-- 错误处理
-- Token 自动添加
-- 统一的响应格式处理
-
-使用方式：
-```javascript
-import { http } from '@/utils/request'
-
-// GET 请求
-const data = await http.get('/api/users')
-
-// POST 请求
-const result = await http.post('/api/users', { name: 'John' })
-```
-
-### 样式系统
-
-- 使用 Sass 作为 CSS 预处理器
-- 已删除所有浏览器默认样式
-- 提供了完整的样式变量和工具类
-- 支持 Element Plus 主题定制
-
-## 🎨 组件库
-
-项目集成了 Element Plus，所有组件都可以直接使用：
-
-```vue
-<template>
-  <el-button type="primary">按钮</el-button>
-  <el-input v-model="input" placeholder="请输入内容"></el-input>
-</template>
-```
-
-## 📝 开发规范
-
-1. **页面组件** 放在 `src/views/` 目录
-2. **公共组件** 放在 `src/components/` 目录
-3. **使用 setup 语法糖** 编写组件
-4. **样式使用 Sass** 并遵循 BEM 命名规范
-5. **API 请求** 统一放在 `src/api/` 目录
-6. **状态管理** 按模块划分，放在 `src/stores/` 目录
-
-## 🚀 部署
-
-```bash
-# 构建生产版本
-npm run build
-
-# 构建完成后，dist 目录包含所有静态文件
-# 可以部署到任何静态文件服务器
-```
-
-## 📄 许可证
-
-MIT License
