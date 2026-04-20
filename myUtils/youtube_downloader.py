@@ -115,12 +115,15 @@ def build_ytdlp_options(proxy: str | None = None, cookiefile: str | None = None,
 
 
 PRIMARY_FORMAT = (
+    "bestvideo*[ext=mp4]+bestaudio[ext=m4a]/"
+    "bestvideo*[ext=mp4]+bestaudio/"
+    "bestvideo*+bestaudio[ext=m4a]/"
+    "bestvideo*+bestaudio/"
     "best*[ext=mp4][vcodec!=none][acodec!=none]/"
-    "best*[vcodec!=none][acodec!=none]/"
-    "bv*+ba/best"
+    "best*[vcodec!=none][acodec!=none]"
 )
 
-FALLBACK_FORMAT = "best/bv*+ba"
+FALLBACK_FORMAT = "bv*+ba/best"
 
 
 def pick_best_subtitle_language(available_languages: list[str]) -> str | None:
