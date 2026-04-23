@@ -1,6 +1,8 @@
 import asyncio
+import logging
 import os
 import sqlite3
+import sys
 import threading
 import time
 import uuid
@@ -8,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from queue import Queue
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, Response, g, jsonify, request, send_from_directory
 from flask_cors import CORS
 
 from conf import BASE_DIR
@@ -42,6 +44,19 @@ app = Flask(__name__)
 CORS(app)
 app.config["MAX_CONTENT_LENGTH"] = 160 * 1024 * 1024
 
+api_logger = logging.getLogger("sau.api")
+if not api_logger.handlers:
+    api_handler = logging.StreamHandler(sys.stdout)
+    api_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s"))
+    api_logger.addHandler(api_handler)
+    log_dir = Path(BASE_DIR) / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    file_handler = logging.FileHandler(log_dir / "api.log", encoding="utf-8")
+    file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s"))
+    api_logger.addHandler(file_handler)
+api_logger.setLevel(logging.INFO)
+api_logger.propagate = False
+
 active_queues = {}
 youtube_tasks = {}
 youtube_task_lock = threading.Lock()
@@ -52,6 +67,61 @@ VIDEO_DIR = Path(BASE_DIR) / "videoFile"
 COOKIE_DIR = Path(BASE_DIR) / "cookiesFile"
 SYSTEM_COOKIE_DIR = COOKIE_DIR / "system"
 ASSETS_DIR = CURRENT_DIR / "assets"
+
+
+def build_request_log_fields():
+    json_payload = request.get_json(silent=True)
+    return {
+        "client_ip": request.headers.get("X-Forwarded-For", request.remote_addr),
+        "query_keys": sorted(request.args.keys()),
+        "form_keys": sorted(request.form.keys()),
+        "json_keys": sorted(json_payload.keys()) if isinstance(json_payload, dict) else [],
+        "file_keys": sorted(request.files.keys()),
+        "content_length": request.content_length or 0,
+    }
+
+
+@app.before_request
+def log_request_started():
+    g.request_started_at = time.perf_counter()
+    g.request_id = uuid.uuid4().hex[:8]
+    fields = build_request_log_fields()
+    api_logger.info(
+        "[%s] -> %s %s ip=%s query=%s form=%s json=%s files=%s len=%s",
+        g.request_id,
+        request.method,
+        request.path,
+        fields["client_ip"],
+        fields["query_keys"],
+        fields["form_keys"],
+        fields["json_keys"],
+        fields["file_keys"],
+        fields["content_length"],
+    )
+
+
+@app.after_request
+def log_request_finished(response):
+    request_id = getattr(g, "request_id", "unknown")
+    started_at = getattr(g, "request_started_at", None)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000 if started_at is not None else -1
+    api_logger.info(
+        "[%s] <- %s %s status=%s duration=%.2fms",
+        request_id,
+        request.method,
+        request.path,
+        response.status_code,
+        elapsed_ms,
+    )
+    return response
+
+
+@app.teardown_request
+def log_request_exception(exc):
+    if exc is None:
+        return
+    request_id = getattr(g, "request_id", "unknown")
+    api_logger.exception("[%s] !! %s %s failed: %s", request_id, request.method, request.path, exc)
 
 
 def db_connection():
@@ -605,6 +675,7 @@ def upload_file():
 
 @app.route("/getFile", methods=["GET"])
 def get_file():
+    print('get_file called with args:', request.args)
     filename = request.args.get("filename")
     if not filename:
         return jsonify({"code": 400, "msg": "filename is required", "data": None}), 400
@@ -720,6 +791,7 @@ def youtube_task():
 
 @app.route("/youtube/tasks", methods=["GET"])
 def youtube_task_list():
+    print('youtube_task_list called with args:', request.args)
     with youtube_task_lock:
         tasks = [serialize_youtube_task(dict(task)) for task in youtube_tasks.values()]
     tasks.sort(key=lambda item: (item.get("createdAt") or "", item.get("taskId") or ""), reverse=True)
@@ -1096,4 +1168,5 @@ def download_cookie():
 
 
 if __name__ == "__main__":
+    print("Sau Backend is running...")
     app.run(host="0.0.0.0", port=5409)
