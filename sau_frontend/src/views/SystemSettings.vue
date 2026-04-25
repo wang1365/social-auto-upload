@@ -1,9 +1,5 @@
 <template>
   <div class="system-settings">
-    <div class="page-header">
-      <h1>系统配置</h1>
-    </div>
-
     <div class="settings-card">
       <el-form label-width="120px">
         <el-form-item label="下载代理">
