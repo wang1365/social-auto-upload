@@ -246,10 +246,18 @@ const applySettings = (data = {}) => {
 }
 
 const applyVideoProcessSettings = (data = {}) => {
+  // 将后端返回的字段名映射到前端期望的字段名
+  const mappedData = {
+    ...data,
+    enableTrimHead: data.trimEnabled,
+    enableTrimTail: data.trimEnabled,
+    enableSpeed: data.speedEnabled,
+    enableCrop: data.cropEnabled,
+  }
   // 确保所有必要的字段都存在，包括新添加的开关字段
   Object.assign(form.videoProcessing, {
     ...defaultVideoProcessSettings,
-    ...data
+    ...mappedData
   })
 }
 
@@ -258,8 +266,7 @@ const loadSettings = async () => {
   try {
     const response = await systemApi.getSettings()
     applySettings(response.data)
-    const processResponse = await systemApi.getVideoProcessSettings()
-    applyVideoProcessSettings(processResponse.data)
+    applyVideoProcessSettings(response.data.videoProcessing)
   } catch (error) {
     console.error(error)
     ElMessage.error(error.message || '加载系统配置失败')
@@ -271,12 +278,18 @@ const loadSettings = async () => {
 const saveSettings = async () => {
   saving.value = true
   try {
+    const videoProcessingPayload = {
+      ...form.videoProcessing,
+      trimEnabled: form.videoProcessing.enableTrimHead || form.videoProcessing.enableTrimTail,
+      speedEnabled: form.videoProcessing.enableSpeed,
+      cropEnabled: form.videoProcessing.enableCrop,
+    }
     const response = await systemApi.saveSettings({
       downloadProxy: form.downloadProxy.trim(),
+      videoProcessing: videoProcessingPayload,
     })
-    const processResponse = await systemApi.saveVideoProcessSettings(form.videoProcessing)
     applySettings(response.data)
-    applyVideoProcessSettings(processResponse.data)
+    applyVideoProcessSettings(response.data.videoProcessing)
     ElMessage.success('系统配置已保存')
   } catch (error) {
     console.error(error)
