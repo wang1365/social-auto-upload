@@ -7,4 +7,8 @@ export const downloadApi = {
 
   createYoutubeDownloadTask: (url, downloadSubtitles = true) =>
     http.post('/youtube/download', { url, downloadSubtitles }),
+
+  listVideoProcessTasks: () => http.get('/video/process/tasks'),
+
+  getVideoProcessTask: (taskId) => http.get('/video/process/task', { taskId }),
 }

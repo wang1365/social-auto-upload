@@ -42,7 +42,8 @@
         <el-table-column prop="filename" label="文件名" min-width="240" show-overflow-tooltip />
         <el-table-column label="来源" width="120">
           <template #default="{ row }">
-            <el-tag v-if="row.source_type === 'youtube'" type="danger">YouTube</el-tag>
+            <el-tag v-if="row.material_type === 'processed'" type="success">已处理</el-tag>
+            <el-tag v-else-if="row.source_type === 'youtube'" type="danger">YouTube</el-tag>
             <span v-else>本地上传</span>
           </template>
         </el-table-column>
@@ -55,6 +56,17 @@
                 class="title-secondary"
               >
                 {{ row.video_title }}
+              </div>
+              <div v-if="row.display_tags?.length" class="tag-row">
+                <el-tag
+                  v-for="tag in row.display_tags"
+                  :key="tag"
+                  size="small"
+                  type="success"
+                  effect="plain"
+                >
+                  {{ tag }}
+                </el-tag>
               </div>
             </div>
           </template>
@@ -197,6 +209,9 @@ const filteredMaterials = computed(() => {
       material.video_description,
       material.source_type,
       material.source_url,
+      material.material_type,
+      ...(material.display_tags || []),
+      material.parent_file_id,
     ]
     return fields.some((field) => (field || '').toLowerCase().includes(keyword))
   })
@@ -426,6 +441,12 @@ onMounted(() => {
   line-height: 1.5;
 }
 
+.tag-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .upload-icon {
   font-size: 28px;
 }
@@ -462,7 +483,7 @@ onMounted(() => {
 .media-preview video,
 .media-preview img {
   max-width: 100%;
-  max-height: 420px;
+  max-height: 320px;
   border-radius: 8px;
 }
 

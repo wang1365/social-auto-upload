@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import sqlite3
@@ -38,6 +39,11 @@ from myUtils.youtube_downloader import (
     is_supported_youtube_url,
     sanitize_filename,
 )
+from myUtils.video_processor import (
+    load_video_processing_config,
+    normalize_video_processing_config,
+    process_video,
+)
 
 
 app = Flask(__name__)
@@ -60,6 +66,10 @@ api_logger.propagate = False
 active_queues = {}
 youtube_tasks = {}
 youtube_task_lock = threading.Lock()
+video_process_tasks = {}
+video_process_task_lock = threading.Lock()
+video_processing_condition = threading.Condition()
+video_processing_active_count = 0
 
 CURRENT_DIR = Path(__file__).resolve().parent
 DATABASE_PATH = Path(BASE_DIR) / "db" / "database.db"
@@ -168,6 +178,11 @@ def ensure_runtime_schema():
             ("video_title_zh", "TEXT"),
             ("video_description", "TEXT"),
             ("subtitle_path", "TEXT"),
+            ("material_type", "TEXT DEFAULT 'original'"),
+            ("parent_file_id", "INTEGER"),
+            ("display_tags", "TEXT"),
+            ("processing_profile", "TEXT"),
+            ("processing_config", "TEXT"),
         ]:
             if column_name not in columns:
                 cursor.execute(f"ALTER TABLE file_records ADD COLUMN {column_name} {column_type}")
@@ -193,6 +208,14 @@ def build_material_row(row):
     row_dict = dict(row)
     file_path = row_dict.get("file_path") or ""
     row_dict["uuid"] = file_path.split("_", 1)[0] if "_" in file_path else ""
+    tags = row_dict.get("display_tags") or "[]"
+    if isinstance(tags, str):
+        try:
+            tags = json.loads(tags)
+        except ValueError:
+            tags = []
+    row_dict["display_tags"] = tags if isinstance(tags, list) else []
+    row_dict["material_type"] = row_dict.get("material_type") or "original"
     return row_dict
 
 
@@ -228,6 +251,14 @@ def build_persisted_youtube_task(row):
         "subtitle_text": None,
         "filename": row_dict.get("filename"),
         "file_path": row_dict.get("file_path"),
+        "processing_task_id": None,
+        "processed_material_id": None,
+        "processed_filename": None,
+        "processed_file_path": None,
+        "processing_status": None,
+        "processing_progress_text": None,
+        "processing_progress_percent": None,
+        "processing_error_message": None,
         "created_at": created_at,
         "updated_at": created_at,
     }
@@ -261,6 +292,20 @@ def delete_system_setting(setting_key: str) -> None:
     with db_connection() as conn:
         conn.execute("DELETE FROM system_settings WHERE setting_key = ?", (setting_key,))
         conn.commit()
+
+
+def get_video_processing_settings() -> dict:
+    raw_value = get_system_setting("video_processing_config", "")
+    return load_video_processing_config(raw_value)
+
+
+def save_video_processing_settings(config: dict) -> dict:
+    normalized_config = normalize_video_processing_config(config)
+    set_system_setting(
+        "video_processing_config",
+        json.dumps(normalized_config, ensure_ascii=False),
+    )
+    return normalized_config
 
 
 def get_youtube_cookie_path() -> Path | None:
@@ -314,14 +359,33 @@ def create_material_record(
     video_title_zh=None,
     video_description=None,
     subtitle_path=None,
+    material_type="original",
+    parent_file_id=None,
+    display_tags=None,
+    processing_profile=None,
+    processing_config=None,
 ):
+    if isinstance(display_tags, list):
+        display_tags_value = json.dumps(display_tags, ensure_ascii=False)
+    elif display_tags:
+        display_tags_value = str(display_tags)
+    else:
+        display_tags_value = None
+    if isinstance(processing_config, dict):
+        processing_config_value = json.dumps(processing_config, ensure_ascii=False)
+    elif processing_config:
+        processing_config_value = str(processing_config)
+    else:
+        processing_config_value = None
     with db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
             INSERT INTO file_records (
-                filename, filesize, file_path, source_url, source_type, video_title, video_title_zh, video_description, subtitle_path
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                filename, filesize, file_path, source_url, source_type, video_title, video_title_zh,
+                video_description, subtitle_path, material_type, parent_file_id, display_tags,
+                processing_profile, processing_config
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 filename,
@@ -333,6 +397,11 @@ def create_material_record(
                 video_title_zh,
                 video_description,
                 subtitle_path,
+                material_type,
+                parent_file_id,
+                display_tags_value,
+                processing_profile,
+                processing_config_value,
             ),
         )
         conn.commit()
@@ -416,9 +485,60 @@ def serialize_youtube_task(task, include_subtitle_text=False):
         "subtitleText": subtitle_text if include_subtitle_text else None,
         "filename": task.get("filename"),
         "filePath": task.get("file_path"),
+        "processingTaskId": task.get("processing_task_id"),
+        "processedMaterialId": task.get("processed_material_id"),
+        "processedFilename": task.get("processed_filename"),
+        "processedFilePath": task.get("processed_file_path"),
+        "processingStatus": task.get("processing_status"),
+        "processingProgressText": task.get("processing_progress_text"),
+        "processingProgressPercent": task.get("processing_progress_percent"),
+        "processingErrorMessage": task.get("processing_error_message"),
         "createdAt": task.get("created_at"),
         "updatedAt": task.get("updated_at"),
     }
+
+
+def update_video_process_task(task_id, **kwargs):
+    with video_process_task_lock:
+        task = video_process_tasks.get(task_id)
+        if task:
+            task.update(kwargs)
+            task["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def serialize_video_process_task(task):
+    return {
+        "taskId": task["task_id"],
+        "status": task["status"],
+        "progressText": task.get("progress_text"),
+        "progressPercent": task.get("progress_percent"),
+        "sourceMaterialId": task.get("source_material_id"),
+        "processedMaterialId": task.get("processed_material_id"),
+        "sourceFilename": task.get("source_filename"),
+        "processedFilename": task.get("processed_filename"),
+        "sourceFilePath": task.get("source_file_path"),
+        "processedFilePath": task.get("processed_file_path"),
+        "errorMessage": task.get("error_message"),
+        "errorDetail": task.get("error_detail"),
+        "config": task.get("config"),
+        "createdAt": task.get("created_at"),
+        "updatedAt": task.get("updated_at"),
+    }
+
+
+def acquire_video_processing_slot():
+    global video_processing_active_count
+    with video_processing_condition:
+        while video_processing_active_count >= get_video_processing_settings().get("maxConcurrent", 4):
+            video_processing_condition.wait(timeout=2)
+        video_processing_active_count += 1
+
+
+def release_video_processing_slot():
+    global video_processing_active_count
+    with video_processing_condition:
+        video_processing_active_count = max(0, video_processing_active_count - 1)
+        video_processing_condition.notify_all()
 
 
 def format_download_progress(status):
@@ -460,6 +580,142 @@ def extract_progress_fields(status):
         "speed_text": speed_text,
         "eta_text": eta_text,
     }
+
+
+def create_video_process_task(source_material_id, source_path, source_filename, youtube_task_id=None):
+    config = get_video_processing_settings()
+    task_id = uuid.uuid4().hex
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    with video_process_task_lock:
+        video_process_tasks[task_id] = {
+            "task_id": task_id,
+            "status": "pending",
+            "progress_text": "Task created",
+            "progress_percent": 0,
+            "source_material_id": source_material_id,
+            "processed_material_id": None,
+            "source_filename": source_filename,
+            "processed_filename": None,
+            "source_file_path": source_path,
+            "processed_file_path": None,
+            "error_message": None,
+            "error_detail": None,
+            "config": config,
+            "youtube_task_id": youtube_task_id,
+            "created_at": now,
+            "updated_at": now,
+        }
+    if youtube_task_id:
+        update_youtube_task(
+            youtube_task_id,
+            processing_task_id=task_id,
+            processing_status="pending",
+            processing_progress_text="Task created",
+            processing_progress_percent=0,
+        )
+    threading.Thread(target=process_material_video, args=(task_id,), daemon=True).start()
+    return task_id
+
+
+def process_material_video(task_id):
+    acquire_video_processing_slot()
+    try:
+        with video_process_task_lock:
+            task = dict(video_process_tasks.get(task_id) or {})
+        if not task:
+            return
+        youtube_task_id = task.get("youtube_task_id")
+        update_video_process_task(
+            task_id,
+            status="processing",
+            progress_text="Preparing video processing",
+            progress_percent=10,
+        )
+        if youtube_task_id:
+            update_youtube_task(
+                youtube_task_id,
+                processing_status="processing",
+                processing_progress_text="Preparing video processing",
+                processing_progress_percent=10,
+            )
+
+        input_path = safe_relative_file(VIDEO_DIR, task["source_file_path"])
+        output_path = input_path.with_name(f"{input_path.stem}.processed.mp4")
+
+        def on_progress(percent, text):
+            update_video_process_task(task_id, progress_percent=percent, progress_text=text)
+            if youtube_task_id:
+                update_youtube_task(
+                    youtube_task_id,
+                    processing_progress_percent=percent,
+                    processing_progress_text=text,
+                )
+
+        result = process_video(input_path, output_path, task.get("config") or {}, progress_callback=on_progress)
+        filesize_mb = round(output_path.stat().st_size / (1024 * 1024), 2)
+        processed_filename = output_path.name
+        source_title = task.get("source_filename") or input_path.name
+        processed_material_id = create_material_record(
+            filename=processed_filename,
+            filepath=processed_filename,
+            filesize_mb=filesize_mb,
+            source_type="processed",
+            video_title=f"{source_title} processed",
+            video_title_zh=f"{source_title}（已处理）",
+            material_type="processed",
+            parent_file_id=task.get("source_material_id"),
+            display_tags=["已处理", "视频处理"],
+            processing_profile=result.get("profile"),
+            processing_config={
+                "config": result.get("config"),
+                "operations": result.get("operations"),
+            },
+        )
+        update_video_process_task(
+            task_id,
+            status="success",
+            progress_text="Processing completed",
+            progress_percent=100,
+            processed_material_id=processed_material_id,
+            processed_filename=processed_filename,
+            processed_file_path=processed_filename,
+            error_message=None,
+            error_detail=None,
+        )
+        if youtube_task_id:
+            update_youtube_task(
+                youtube_task_id,
+                processed_material_id=processed_material_id,
+                processed_filename=processed_filename,
+                processed_file_path=processed_filename,
+                processing_status="success",
+                processing_progress_text="Processing completed",
+                processing_progress_percent=100,
+                processing_error_message=None,
+            )
+    except Exception as exc:
+        error_message = str(exc)
+        update_video_process_task(
+            task_id,
+            status="failed",
+            progress_text="Processing failed",
+            progress_percent=100,
+            error_message=error_message,
+            error_detail=error_message,
+        )
+        with video_process_task_lock:
+            task = dict(video_process_tasks.get(task_id) or {})
+        youtube_task_id = task.get("youtube_task_id")
+        if youtube_task_id:
+            update_youtube_task(
+                youtube_task_id,
+                processing_status="failed",
+                processing_progress_text="Processing failed",
+                processing_progress_percent=100,
+                processing_error_message=error_message,
+            )
+    finally:
+        release_video_processing_slot()
 
 
 def process_youtube_download(task_id, url, download_subtitles=True):
@@ -589,6 +845,14 @@ def process_youtube_download(task_id, url, download_subtitles=True):
             speed_text=None,
             eta_text=None,
         )
+        processing_config = get_video_processing_settings()
+        if processing_config.get("autoProcess", True) and final_path.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm", ".avi"}:
+            create_video_process_task(
+                source_material_id=material_id,
+                source_path=final_path.name,
+                source_filename=final_path.name,
+                youtube_task_id=task_id,
+            )
     except Exception as exc:
         error_code, error_message, error_detail = classify_ytdlp_error(exc)
         update_youtube_task(
@@ -763,6 +1027,14 @@ def youtube_download():
             "subtitle_text": None,
             "filename": None,
             "file_path": None,
+            "processing_task_id": None,
+            "processed_material_id": None,
+            "processed_filename": None,
+            "processed_file_path": None,
+            "processing_status": None,
+            "processing_progress_text": None,
+            "processing_progress_percent": None,
+            "processing_error_message": None,
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
@@ -808,6 +1080,7 @@ def get_system_settings():
             "downloadProxy": get_system_setting("download_proxy", ""),
             "youtubeCookieFileName": youtube_cookie_file,
             "youtubeCookieConfigured": bool(youtube_cookie_file),
+            "videoProcessing": get_video_processing_settings(),
         },
     }), 200
 
@@ -823,6 +1096,11 @@ def update_system_settings():
             "data": None,
         }), 400
     set_system_setting("download_proxy", download_proxy)
+    
+    # 处理视频处理设置
+    video_processing_config = data.get("videoProcessing", {})
+    save_video_processing_settings(video_processing_config)
+    
     return jsonify({
         "code": 200,
         "msg": "Settings saved",
@@ -830,8 +1108,30 @@ def update_system_settings():
             "downloadProxy": download_proxy,
             "youtubeCookieFileName": get_system_setting("youtube_cookie_file", "").strip(),
             "youtubeCookieConfigured": bool(get_system_setting("youtube_cookie_file", "").strip()),
+            "videoProcessing": get_video_processing_settings(),
         },
     }), 200
+
+
+@app.route("/video/process/tasks", methods=["GET"])
+def video_process_task_list():
+    with video_process_task_lock:
+        tasks = [serialize_video_process_task(dict(task)) for task in video_process_tasks.values()]
+    tasks.sort(key=lambda item: (item.get("createdAt") or "", item.get("taskId") or ""), reverse=True)
+    return jsonify({"code": 200, "msg": "success", "data": tasks}), 200
+
+
+@app.route("/video/process/task", methods=["GET"])
+def video_process_task_detail():
+    task_id = request.args.get("taskId", "").strip()
+    if not task_id:
+        return jsonify({"code": 400, "msg": "taskId is required", "data": None}), 400
+    with video_process_task_lock:
+        task = video_process_tasks.get(task_id)
+        if not task:
+            return jsonify({"code": 404, "msg": "Task not found", "data": None}), 404
+        payload = serialize_video_process_task(dict(task))
+    return jsonify({"code": 200, "msg": "success", "data": payload}), 200
 
 
 @app.route("/system/settings/youtube-cookie", methods=["POST"])

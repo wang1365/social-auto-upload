@@ -180,8 +180,17 @@
       </template>
     </el-dialog>
 
-    <el-drawer v-model="detailVisible" title="下载详情" size="820px">
+    <el-dialog
+      v-model="detailVisible"
+      title="下载详情"
+      width="95%"
+      top="5vh"
+      class="download-detail-dialog"
+      destroy-on-close
+    >
       <template v-if="selectedTask">
+        <div class="detail-dialog-layout">
+          <aside class="detail-info-pane">
         <div class="detail-section">
           <div class="detail-grid">
             <div><strong>任务 ID：</strong>{{ selectedTask.taskId }}</div>
@@ -249,9 +258,32 @@
         </div>
 
         <div class="detail-section">
-          <div class="section-title">视频播放</div>
-          <el-tabs v-model="activePlaybackTab">
-            <el-tab-pane label="源视频" name="source">
+          <div class="section-title">视频处理</div>
+          <div class="processing-card">
+            <el-tag :type="processingTagType(selectedTask.processingStatus)">
+              {{ processingLabel(selectedTask.processingStatus) }}
+            </el-tag>
+            <span>{{ selectedTask.processingProgressText || '等待下载完成后自动处理' }}</span>
+            <el-progress
+              v-if="selectedTask.processingStatus"
+              :percentage="normalizedProcessingProgress(selectedTask)"
+              :status="selectedTask.processingStatus === 'failed' ? 'exception' : undefined"
+            />
+            <div v-if="selectedTask.processingErrorMessage" class="error-summary">
+              {{ selectedTask.processingErrorMessage }}
+            </div>
+            <div v-if="selectedTask.processedFilePath" class="detail-actions">
+              <el-button type="primary" @click="activePlaybackTab = 'processed'">播放处理后视频</el-button>
+              <el-button type="success" @click="goToProcessedPublish(selectedTask)">发布处理后视频</el-button>
+            </div>
+          </div>
+        </div>
+
+          </aside>
+          <main class="detail-preview-pane">
+            <div class="preview-grid">
+              <section class="preview-panel">
+                <div class="preview-title">源视频</div>
               <iframe
                 v-if="youtubeEmbedUrl"
                 class="source-player"
@@ -262,8 +294,9 @@
                 allowfullscreen
               />
               <el-empty v-else description="当前无可播放源视频" />
-            </el-tab-pane>
-            <el-tab-pane label="已下载视频" name="local">
+              </section>
+              <section class="preview-panel">
+                <div class="preview-title">已下载视频</div>
               <video
                 v-if="selectedTask.filePath && isVideoFile(selectedTask.filename || selectedTask.filePath)"
                 controls
@@ -271,8 +304,21 @@
                 :src="materialApi.getMaterialPreviewUrl(selectedTask.filePath)"
               />
               <el-empty v-else description="当前无已下载视频文件" />
-            </el-tab-pane>
-            <el-tab-pane label="字幕" name="subtitle">
+              </section>
+              <section class="preview-panel">
+                <div class="preview-title">处理后视频</div>
+              <video
+                v-if="selectedTask.processedFilePath"
+                controls
+                class="video-player"
+                :src="materialApi.getMaterialPreviewUrl(selectedTask.processedFilePath)"
+              />
+              <el-empty v-else description="当前没有处理后视频" />
+              </section>
+            </div>
+
+            <div class="detail-section subtitle-section">
+              <div class="section-title">字幕</div>
               <div v-if="selectedTask.subtitleText" class="subtitle-box">{{ selectedTask.subtitleText }}</div>
               <el-empty v-else description="当前任务无可展示字幕" />
               <div class="detail-actions">
@@ -293,9 +339,8 @@
                   下载字幕文件
                 </el-button>
               </div>
-            </el-tab-pane>
-          </el-tabs>
-        </div>
+            </div>
+          </main>
 
         <div v-if="selectedTask.errorMessage" class="detail-section error-panel">
           <div class="section-title">失败信息</div>
@@ -325,8 +370,9 @@
             </el-button>
           </div>
         </div>
+        </div>
       </template>
-    </el-drawer>
+    </el-dialog>
   </div>
 </template>
 
@@ -377,7 +423,12 @@ const filteredTasks = computed(() => {
 })
 
 const hasActiveTasks = computed(() =>
-  tasks.value.some((task) => task.status === 'pending' || task.status === 'downloading')
+  tasks.value.some((task) =>
+    task.status === 'pending' ||
+    task.status === 'downloading' ||
+    task.processingStatus === 'pending' ||
+    task.processingStatus === 'processing'
+  )
 )
 
 const youtubeEmbedUrl = computed(() => {
@@ -433,6 +484,30 @@ const normalizedProgress = (task) => {
   return 0
 }
 
+const normalizedProcessingProgress = (task) => {
+  if (!task) return 0
+  if (typeof task.processingProgressPercent === 'number') {
+    return Math.max(0, Math.min(100, Math.round(task.processingProgressPercent)))
+  }
+  if (task.processingStatus === 'success' || task.processingStatus === 'failed') return 100
+  return 0
+}
+
+const processingLabel = (status) => {
+  if (status === 'pending') return '等待处理'
+  if (status === 'processing') return '处理中'
+  if (status === 'success') return '处理完成'
+  if (status === 'failed') return '处理失败'
+  return '未开始'
+}
+
+const processingTagType = (status) => {
+  if (status === 'success') return 'success'
+  if (status === 'failed') return 'danger'
+  if (status === 'processing') return 'warning'
+  return 'info'
+}
+
 const formatBytes = (value) => {
   if (typeof value !== 'number' || Number.isNaN(value) || value < 0) return '-'
   if (value < 1024) return `${value} B`
@@ -462,7 +537,7 @@ const stopPolling = () => {
 const buildMaterialSignature = (taskList) =>
   taskList
     .filter((task) => task.status === 'success' && task.materialId)
-    .map((task) => `${task.materialId}:${task.updatedAt || ''}`)
+    .map((task) => `${task.materialId}:${task.processedMaterialId || ''}:${task.updatedAt || ''}`)
     .sort()
     .join('|')
 
@@ -533,6 +608,24 @@ const goToPublish = async (task) => {
     return
   }
 
+  appStore.setPendingPublishMaterials([material])
+  await router.push('/publish-center')
+}
+
+const goToProcessedPublish = async (task) => {
+  if (!task?.processedMaterialId) {
+    ElMessage.warning('当前任务还没有生成处理后素材')
+    return
+  }
+  let material = appStore.materials.find((item) => item.id === task.processedMaterialId)
+  if (!material) {
+    await syncMaterials()
+    material = appStore.materials.find((item) => item.id === task.processedMaterialId)
+  }
+  if (!material) {
+    ElMessage.error('未找到处理后素材，请先刷新列表后重试')
+    return
+  }
   appStore.setPendingPublishMaterials([material])
   await router.push('/publish-center')
 }
@@ -761,6 +854,47 @@ onBeforeUnmount(() => {
   margin-bottom: 24px;
 }
 
+.download-detail-dialog :deep(.el-dialog__body) {
+  max-height: 78vh;
+  overflow: hidden;
+}
+
+.detail-dialog-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(0, 3fr);
+  gap: 20px;
+  height: 78vh;
+  min-height: 0;
+}
+
+.detail-info-pane,
+.detail-preview-pane {
+  min-height: 0;
+  overflow: auto;
+}
+
+.detail-info-pane {
+  padding-right: 4px;
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.preview-panel {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.preview-title {
+  margin-bottom: 10px;
+  font-weight: 600;
+  color: #303133;
+}
+
 .section-title {
   margin-bottom: 12px;
   font-weight: 600;
@@ -834,13 +968,35 @@ onBeforeUnmount(() => {
   gap: 12px 20px;
 }
 
-.source-player,
-.video-player {
+.processing-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 8px;
+  background: #f7f8fa;
+}
+
+.source-player {
   width: 100%;
-  min-height: 420px;
+  height: 58vh;
+  max-height: 58vh;
   border: 0;
   border-radius: 8px;
   background: #000;
+}
+
+.video-player {
+  display: block;
+  width: calc(100% + 12px);
+  max-width: none;
+  height: 58vh;
+  max-height: 58vh;
+  margin: 0 -6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  object-fit: cover;
 }
 
 .error-panel {
@@ -871,15 +1027,34 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
   }
 
+  .download-detail-dialog :deep(.el-dialog__body) {
+    max-height: 82vh;
+  }
+
+  .detail-dialog-layout {
+    grid-template-columns: 1fr;
+    height: 82vh;
+  }
+
+  .preview-grid {
+    grid-template-columns: 1fr;
+  }
+
   .url-cell,
   .detail-url-row {
     flex-direction: column;
     align-items: flex-start;
   }
 
-  .source-player,
+  .source-player {
+    height: 240px;
+    max-height: 36vh;
+  }
+
   .video-player {
-    min-height: 240px;
+    width: calc(100% + 12px);
+    height: auto;
+    max-height: 36vh;
   }
 }
 </style>

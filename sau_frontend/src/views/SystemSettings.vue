@@ -2,7 +2,6 @@
   <div class="system-settings">
     <div class="page-header">
       <h1>系统配置</h1>
-      <p>管理 YouTube 下载使用的全局代理和 Cookie 文件。</p>
     </div>
 
     <div class="settings-card">
@@ -31,19 +30,19 @@
               </span>
             </div>
 
-            <el-upload
-              class="cookie-upload"
-              :auto-upload="false"
-              :show-file-list="false"
-              accept=".txt"
-              :on-change="handleCookieSelect"
-            >
-              <template #trigger>
-                <el-button :loading="uploadingCookie">选择 Cookie 文件</el-button>
-              </template>
-            </el-upload>
+            <div class="cookie-buttons">
+              <el-upload
+                class="cookie-upload"
+                :auto-upload="false"
+                :show-file-list="false"
+                accept=".txt"
+                :on-change="handleCookieSelect"
+              >
+                <template #trigger>
+                  <el-button :loading="uploadingCookie">选择 Cookie 文件</el-button>
+                </template>
+              </el-upload>
 
-            <div class="cookie-actions">
               <el-button
                 type="primary"
                 :disabled="!selectedCookieFile"
@@ -72,12 +71,125 @@
             </div>
           </div>
         </el-form-item>
+
+        <el-divider />
+
+        <el-form-item label="视频处理">
+          <div class="video-process-panel">
+            <el-switch
+              v-model="form.videoProcessing.autoProcess"
+              inline-prompt
+              active-text="开启"
+              inactive-text="关闭"
+            />
+            <div class="process-groups">
+              <div class="process-group">
+                <div class="group-header">
+                  <span class="group-label">片头处理</span>
+                  <el-switch v-model="form.videoProcessing.enableTrimHead" />
+                </div>
+                <div class="group-controls">
+                  <div class="process-item">
+                    <span class="process-label">最小秒</span>
+                    <el-input-number v-model="form.videoProcessing.trimHeadMin" :min="0" :max="10" :step="0.1" />
+                  </div>
+                  <div class="process-item">
+                    <span class="process-label">最大秒</span>
+                    <el-input-number v-model="form.videoProcessing.trimHeadMax" :min="0" :max="10" :step="0.1" />
+                  </div>
+                </div>
+              </div>
+              
+              <div class="process-group">
+                <div class="group-header">
+                  <span class="group-label">片尾处理</span>
+                  <el-switch v-model="form.videoProcessing.enableTrimTail" />
+                </div>
+                <div class="group-controls">
+                  <div class="process-item">
+                    <span class="process-label">最小秒</span>
+                    <el-input-number v-model="form.videoProcessing.trimTailMin" :min="0" :max="10" :step="0.1" />
+                  </div>
+                  <div class="process-item">
+                    <span class="process-label">最大秒</span>
+                    <el-input-number v-model="form.videoProcessing.trimTailMax" :min="0" :max="10" :step="0.1" />
+                  </div>
+                </div>
+              </div>
+              
+              <div class="process-group">
+                <div class="group-header">
+                  <span class="group-label">变速处理</span>
+                  <el-switch v-model="form.videoProcessing.enableSpeed" />
+                </div>
+                <div class="group-controls">
+                  <div class="process-item">
+                    <span class="process-label">最小</span>
+                    <el-input-number v-model="form.videoProcessing.speedMin" :min="0.5" :max="2" :step="0.01" />
+                  </div>
+                  <div class="process-item">
+                    <span class="process-label">最大</span>
+                    <el-input-number v-model="form.videoProcessing.speedMax" :min="0.5" :max="2" :step="0.01" />
+                  </div>
+                </div>
+              </div>
+              
+              <div class="process-group">
+                <div class="group-header">
+                  <span class="group-label">裁剪处理</span>
+                  <el-switch v-model="form.videoProcessing.enableCrop" />
+                </div>
+                <div class="group-controls">
+                  <div class="process-item">
+                    <span class="process-label">最小%</span>
+                    <el-input-number v-model="form.videoProcessing.cropPercentMin" :min="0" :max="10" :step="0.1" />
+                  </div>
+                  <div class="process-item">
+                    <span class="process-label">最大%</span>
+                    <el-input-number v-model="form.videoProcessing.cropPercentMax" :min="0" :max="10" :step="0.1" />
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <div class="process-row">
+              <div class="process-item-half">
+                <span class="process-label">粉色滤镜</span>
+                <el-slider v-model="form.videoProcessing.pinkFilterStrength" :min="0" :max="1" :step="0.01" />
+              </div>
+              <div class="process-item-half">
+                <span class="process-label">随机抽帧</span>
+                <el-slider v-model="form.videoProcessing.frameDropStrength" :min="0" :max="0.2" :step="0.01" />
+              </div>
+            </div>
+            <div class="process-inline">
+              <el-switch v-model="form.videoProcessing.lightSweep" active-text="扫光" inactive-text="不扫光" />
+              <div class="process-item-inline">
+                <span class="process-label">并发数</span>
+                <el-input-number v-model="form.videoProcessing.maxConcurrent" :min="1" :max="8" :step="1" />
+              </div>
+              <div class="process-item-inline">
+                <span class="process-label">硬件模式</span>
+                <el-select v-model="form.videoProcessing.hardwareMode" style="width: 100px">
+                  <el-option label="CPU" value="cpu" />
+                  <el-option label="GPU" value="gpu" />
+                </el-select>
+              </div>
+            </div>
+            <div class="field-tip">
+              下载完成后自动生成处理后视频；原视频保留，处理后视频会在素材库显示“已处理”标签。
+            </div>
+            <div class="process-actions">
+              <el-button type="info" plain @click="resetVideoProcessSettings">重置视频处理参数</el-button>
+            </div>
+          </div>
+        </el-form-item>
       </el-form>
 
       <div class="actions">
         <el-button @click="loadSettings" :loading="loading">刷新</el-button>
         <el-button type="primary" @click="saveSettings" :loading="saving">
-          保存代理配置
+          保存配置
         </el-button>
       </div>
     </div>
@@ -96,10 +208,35 @@ const uploadingCookie = ref(false)
 const clearingCookie = ref(false)
 const selectedCookieFile = ref(null)
 
+// 默认视频处理参数
+const defaultVideoProcessSettings = {
+  autoProcess: true,
+  enableTrimHead: true,
+  trimHeadMin: 0.3,
+  trimHeadMax: 1.2,
+  enableTrimTail: true,
+  trimTailMin: 0.3,
+  trimTailMax: 1.2,
+  enableSpeed: true,
+  speedMin: 0.97,
+  speedMax: 1.03,
+  enableCrop: true,
+  cropPercentMin: 1,
+  cropPercentMax: 3,
+  pinkFilterStrength: 0.12,
+  lightSweep: true,
+  frameDropStrength: 0.02,
+  maxConcurrent: 4,
+  hardwareMode: 'cpu',
+}
+
 const form = reactive({
   downloadProxy: '',
   youtubeCookieFileName: '',
   youtubeCookieConfigured: false,
+  videoProcessing: {
+    ...defaultVideoProcessSettings
+  },
 })
 
 const applySettings = (data = {}) => {
@@ -108,11 +245,21 @@ const applySettings = (data = {}) => {
   form.youtubeCookieConfigured = Boolean(data.youtubeCookieConfigured)
 }
 
+const applyVideoProcessSettings = (data = {}) => {
+  // 确保所有必要的字段都存在，包括新添加的开关字段
+  Object.assign(form.videoProcessing, {
+    ...defaultVideoProcessSettings,
+    ...data
+  })
+}
+
 const loadSettings = async () => {
   loading.value = true
   try {
     const response = await systemApi.getSettings()
     applySettings(response.data)
+    const processResponse = await systemApi.getVideoProcessSettings()
+    applyVideoProcessSettings(processResponse.data)
   } catch (error) {
     console.error(error)
     ElMessage.error(error.message || '加载系统配置失败')
@@ -127,7 +274,9 @@ const saveSettings = async () => {
     const response = await systemApi.saveSettings({
       downloadProxy: form.downloadProxy.trim(),
     })
+    const processResponse = await systemApi.saveVideoProcessSettings(form.videoProcessing)
     applySettings(response.data)
+    applyVideoProcessSettings(processResponse.data)
     ElMessage.success('系统配置已保存')
   } catch (error) {
     console.error(error)
@@ -189,6 +338,11 @@ const clearCookie = async () => {
   }
 }
 
+const resetVideoProcessSettings = () => {
+  Object.assign(form.videoProcessing, defaultVideoProcessSettings)
+  ElMessage.success('视频处理参数已重置为默认值')
+}
+
 onMounted(() => {
   loadSettings()
 })
@@ -221,8 +375,96 @@ onMounted(() => {
 .cookie-panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
+}
+
+.video-process-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.process-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.process-group {
+  background: #f9f9f9;
+  border-radius: 6px;
+  padding: 10px;
+  border: 1px solid #f0f0f0;
+}
+
+.group-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.group-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #303133;
+}
+
+.group-controls {
+  display: flex;
+  gap: 12px;
+}
+
+.process-item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.process-item-half {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 10px;
+}
+
+.process-item-half:last-child {
+  padding-right: 0;
+}
+
+.process-item-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.process-label {
+  color: #909399;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.process-row {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.process-inline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.process-actions {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-start;
 }
 
 .cookie-status {
@@ -230,6 +472,7 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+  margin-bottom: 8px;
 }
 
 .cookie-name {
@@ -237,10 +480,15 @@ onMounted(() => {
   word-break: break-all;
 }
 
-.cookie-actions {
+.cookie-buttons {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+.cookie-upload {
+  margin-right: 0;
 }
 
 .field-tip {
@@ -258,6 +506,21 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
-  margin-top: 24px;
+  margin-top: 20px;
+}
+
+@media (max-width: 900px) {
+  .process-groups {
+    grid-template-columns: 1fr;
+  }
+
+  .process-row {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .process-item-half {
+    padding-right: 0;
+  }
 }
 </style>
