@@ -278,12 +278,15 @@ def page_header(title: str, subtitle: str = "") -> QWidget:
 
 class DenseTable(QTableWidget):
     def __init__(self, headers: list[str], column_widths: list[int] | None = None):
-        super().__init__(0, len(headers))
+        # 添加复选框列到表头
+        headers_with_checkbox = [''] + headers
+        super().__init__(0, len(headers_with_checkbox))
         self.column_widths = column_widths or []
-        self.setHorizontalHeaderLabels(headers)
+        self.setHorizontalHeaderLabels(headers_with_checkbox)
         self.setAlternatingRowColors(True)
         self.setSortingEnabled(True)
         self.setSelectionBehavior(QTableWidget.SelectRows)
+        self.setSelectionMode(QTableWidget.MultiSelection)
         self.setEditTriggers(QTableWidget.NoEditTriggers)
         self.setShowGrid(True)
         self.setWordWrap(False)
@@ -292,8 +295,10 @@ class DenseTable(QTableWidget):
         self.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.horizontalHeader().setStretchLastSection(True)
         self.horizontalHeader().setMinimumSectionSize(54)
+        # 为复选框列设置固定宽度
+        self.setColumnWidth(0, 40)
         for index, width in enumerate(self.column_widths):
-            self.setColumnWidth(index, width)
+            self.setColumnWidth(index + 1, width)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
     def set_rows(self, rows: list[list[object]], payloads: list[object] | None = None):
@@ -301,16 +306,36 @@ class DenseTable(QTableWidget):
         self.setRowCount(len(rows))
         payloads = payloads or [None] * len(rows)
         for row_index, row in enumerate(rows):
+            # 创建复选框项作为第一列
+            check_item = QTableWidgetItem()
+            check_item.setCheckState(Qt.Unchecked)
+            check_item.setData(Qt.UserRole + 1, payloads[row_index])
+            self.setItem(row_index, 0, check_item)
+            
+            # 设置其他列数据
             for column_index, value in enumerate(row):
                 text = "" if value is None else str(value)
                 item = QTableWidgetItem(text)
                 item.setData(Qt.UserRole, value)
                 item.setData(Qt.UserRole + 1, payloads[row_index])
                 item.setToolTip(text)
-                self.setItem(row_index, column_index, item)
+                self.setItem(row_index, column_index + 1, item)
+        
+        # 调整列宽，为复选框列预留空间
+        self.setColumnWidth(0, 40)
         for index, width in enumerate(self.column_widths):
-            self.setColumnWidth(index, width)
+            self.setColumnWidth(index + 1, width)
         self.setSortingEnabled(True)
+    
+    def get_payload(self, row: int) -> object:
+        """Get the payload for a specific row"""
+        if 0 <= row < self.rowCount():
+            item = self.item(row, 0)  # 复选框列存储payload
+            if item:
+                return item.data(Qt.UserRole + 1)
+        return None
+    
+
 
 
 class DashboardPage(QWidget):
@@ -617,6 +642,7 @@ class DownloadPage(QWidget):
         action_row.setSpacing(8)
         action_row.addWidget(make_button("新建下载", self.create_task, primary=True))
         action_row.addWidget(make_button("刷新", self.refresh))
+        action_row.addWidget(make_button("批量删除", self.delete_selected_tasks, danger=True))
         action_row.addStretch()
 
         layout = QVBoxLayout(self)
@@ -689,9 +715,63 @@ class DownloadPage(QWidget):
             return
         menu = QMenu(self)
         detail_action = menu.addAction("查看详情")
+        delete_action = menu.addAction("删除")
         action = menu.exec(self.table.viewport().mapToGlobal(position))
         if action == detail_action:
             self.open_selected_task_detail()
+        elif action == delete_action:
+            self.delete_selected_task()
+
+    def delete_selected_task(self):
+        task = self.selected_task()
+        if not task:
+            return
+        task_id = task.get("taskId")
+        if not task_id:
+            return
+        reply = QMessageBox.question(
+            self,
+            "删除任务",
+            f"确定要删除此下载任务吗？\n{task.get('videoTitleZh') or task.get('videoTitle') or '未知视频'}",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            try:
+                self.download_service.delete_youtube_task(task_id)
+                self.refresh()
+                QMessageBox.information(self, "删除成功", "下载任务已删除")
+            except Exception as e:
+                QMessageBox.warning(self, "删除失败", f"删除任务时出错: {str(e)}")
+
+    def delete_selected_tasks(self):
+        selected_rows = self.table.selectionModel().selectedRows()
+        if not selected_rows:
+            return
+        task_ids = []
+        task_titles = []
+        for index in selected_rows:
+            task = self.table.item(index.row(), 0).data(Qt.UserRole + 1)
+            task_id = task.get("taskId")
+            if task_id:
+                task_ids.append(task_id)
+                task_titles.append(task.get('videoTitleZh') or task.get('videoTitle') or '未知视频')
+        if not task_ids:
+            return
+        reply = QMessageBox.question(
+            self,
+            "批量删除",
+            f"确定要删除这 {len(task_ids)} 个下载任务吗？\n\n{chr(10).join(task_titles[:3])}{'...' if len(task_titles) > 3 else ''}",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            try:
+                result = self.download_service.delete_youtube_tasks(task_ids)
+                self.refresh()
+                QMessageBox.information(self, "删除成功", f"成功删除 {len(result.get('deleted', []))} 个任务")
+            except Exception as e:
+                QMessageBox.warning(self, "删除失败", f"删除任务时出错: {str(e)}")
 
     def _progress_text(self, task: dict) -> str:
         percent = task.get("progressPercent")

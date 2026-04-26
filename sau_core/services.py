@@ -999,6 +999,123 @@ class DownloadService:
             "eta_text": (status.get("_eta_str") or "").strip() or None,
         }
 
+    def delete_youtube_task(self, task_id: str) -> dict:
+        """Delete a download task and its associated files"""
+        # First check if it's an in-memory task
+        with self.lock:
+            task = self.tasks.get(task_id)
+            if task:
+                # Remove from in-memory tasks
+                del self.tasks[task_id]
+                # If it has a material ID, delete the material
+                if task.get("material_id"):
+                    material_service = MaterialService()
+                    return material_service.delete_material(task["material_id"])
+                return {"taskId": task_id, "deleted": True}
+        
+        # Check if it's a persisted task (material record)
+        if task_id.startswith("material-"):
+            try:
+                material_id = int(task_id.split("-", 1)[1])
+                material_service = MaterialService()
+                return material_service.delete_material(material_id)
+            except (ValueError, ServiceError):
+                raise ServiceError("Task not found", "not_found")
+        
+        raise ServiceError("Task not found", "not_found")
+
+    def delete_youtube_tasks(self, task_ids: Iterable[str]) -> dict:
+        """Delete multiple download tasks and their associated files"""
+        deleted_items = []
+        missing_ids = []
+        
+        for task_id in task_ids:
+            try:
+                deleted = self.delete_youtube_task(task_id)
+                deleted_items.append({"taskId": task_id, **deleted})
+            except ServiceError:
+                missing_ids.append(task_id)
+        
+        return {"deleted": deleted_items, "missingIds": missing_ids}
+
+    def delete_youtube_task(self, task_id: str) -> dict:
+        """Delete a download task and its associated files"""
+        # First check if it's an in-memory task
+        with self.lock:
+            task = self.tasks.get(task_id)
+            if task:
+                # Remove from in-memory tasks
+                del self.tasks[task_id]
+                # If it has a material ID, delete the material
+                if task.get("material_id"):
+                    material_service = MaterialService()
+                    return material_service.delete_material(task["material_id"])
+                return {"taskId": task_id, "deleted": True}
+        
+        # Check if it's a persisted task (material record)
+        if task_id.startswith("material-"):
+            try:
+                material_id = int(task_id.split("-", 1)[1])
+                material_service = MaterialService()
+                return material_service.delete_material(material_id)
+            except (ValueError, ServiceError):
+                raise ServiceError("Task not found", "not_found")
+        
+        raise ServiceError("Task not found", "not_found")
+
+    def delete_youtube_tasks(self, task_ids: Iterable[str]) -> dict:
+        """Delete multiple download tasks and their associated files"""
+        deleted_items = []
+        missing_ids = []
+        
+        for task_id in task_ids:
+            try:
+                deleted = self.delete_youtube_task(task_id)
+                deleted_items.append({"taskId": task_id, **deleted})
+            except ServiceError:
+                missing_ids.append(task_id)
+        
+        return {"deleted": deleted_items, "missingIds": missing_ids}
+
+    def delete_youtube_task(self, task_id: str) -> dict:
+        """Delete a download task and its associated files"""
+        # First check if it's an in-memory task
+        with self.lock:
+            task = self.tasks.get(task_id)
+            if task:
+                # Remove from in-memory tasks
+                del self.tasks[task_id]
+                # If it has a material ID, delete the material
+                if task.get("material_id"):
+                    material_service = MaterialService()
+                    return material_service.delete_material(task["material_id"])
+                return {"taskId": task_id, "deleted": True}
+        
+        # Check if it's a persisted task (material record)
+        if task_id.startswith("material-"):
+            try:
+                material_id = int(task_id.split("-", 1)[1])
+                material_service = MaterialService()
+                return material_service.delete_material(material_id)
+            except (ValueError, ServiceError):
+                raise ServiceError("Task not found", "not_found")
+        
+        raise ServiceError("Task not found", "not_found")
+
+    def delete_youtube_tasks(self, task_ids: Iterable[str]) -> dict:
+        """Delete multiple download tasks and their associated files"""
+        deleted_items = []
+        missing_ids = []
+        
+        for task_id in task_ids:
+            try:
+                deleted = self.delete_youtube_task(task_id)
+                deleted_items.append({"taskId": task_id, **deleted})
+            except ServiceError:
+                missing_ids.append(task_id)
+        
+        return {"deleted": deleted_items, "missingIds": missing_ids}
+
 
 class PublishService:
     def publish(self, payload: dict) -> None:
