@@ -16,20 +16,23 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from sau_core.services import ProcessingService, SettingsService
-from sau_desktop._shared import make_button, page_header
+from sau_desktop._shared import EventBus, make_button, page_header
 
 
 class SettingsPage(QWidget):
-    def __init__(self, settings_service: SettingsService, processing_service: ProcessingService):
+    def __init__(self, settings_service: SettingsService, processing_service: ProcessingService, event_bus: EventBus):
         super().__init__()
         self.settings_service = settings_service
         self.processing_service = processing_service
+        self.event_bus = event_bus
+        self._dirty = False
         self.proxy = QLineEdit()
         self.cookie_status = QLabel()
         self.auto_process = QCheckBox("下载后自动处理")
@@ -97,7 +100,7 @@ class SettingsPage(QWidget):
         video_layout.setSpacing(8)
         video_layout.addWidget(self.auto_process)
         video_layout.addLayout(process_grid)
-        tip = QLabel('下载完成后可自动生成处理后视频；原视频保留，处理后视频会在素材库显示"已处理"。')
+        tip = QLabel("下载完成后可自动生成处理后视频；原视频保留，处理后视频会在素材库显示\u201c已处理\u201d。")
         tip.setObjectName("PageSubtitle")
         video_layout.addWidget(tip)
         video_actions = QHBoxLayout()
@@ -123,7 +126,46 @@ class SettingsPage(QWidget):
         layout.addWidget(video_group)
         layout.addLayout(buttons)
         layout.addStretch()
-        self.load()
+
+        # Connect all value-change signals for dirty tracking
+        self._connect_dirty_signals()
+
+    def _connect_dirty_signals(self):
+        """Connect value-changed signals to mark settings as dirty."""
+        self.proxy.textChanged.connect(self._mark_dirty)
+        self.auto_process.stateChanged.connect(self._mark_dirty)
+        for checkbox in (
+            self.trim_head_enabled, self.trim_tail_enabled,
+            self.speed_enabled, self.crop_enabled,
+            self.pink_enabled, self.light_sweep,
+            self.frame_drop_enabled, self.edge_guard_enabled,
+        ):
+            checkbox.stateChanged.connect(self._mark_dirty)
+        for spinbox in (
+            self.trim_head_min, self.trim_head_max,
+            self.trim_tail_min, self.trim_tail_max,
+            self.speed_min, self.speed_max,
+            self.crop_min, self.crop_max,
+            self.pink_strength, self.frame_drop_strength,
+            self.edge_guard_pixels, self.max_concurrent,
+        ):
+            spinbox.valueChanged.connect(self._mark_dirty)
+        self.hardware.currentIndexChanged.connect(self._mark_dirty)
+
+    def _mark_dirty(self):
+        self._dirty = True
+
+    def check_unsaved(self) -> bool:
+        """Check for unsaved changes and prompt user. Returns True if safe to proceed."""
+        if not self._dirty:
+            return True
+        reply = QMessageBox.question(
+            self, "未保存的更改",
+            "设置已修改但未保存，是否放弃更改？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return reply == QMessageBox.Yes
 
     def _double_spin(self, minimum: float, maximum: float, step: float) -> QDoubleSpinBox:
         widget = QDoubleSpinBox()
@@ -178,18 +220,23 @@ class SettingsPage(QWidget):
         self.edge_guard_pixels.setValue(int(config.get("edgeGuardPixels", 8)))
         self.max_concurrent.setValue(int(config.get("maxConcurrent", 4)))
         self.hardware.setCurrentText(config.get("hardwareMode", "cpu"))
+        self._dirty = False
 
     def save(self):
         self.settings_service.save_settings(
             self.proxy.text(),
             self._video_processing_payload(),
         )
+        self._dirty = False
+        self.event_bus.settings_changed.emit()
         self.load()
 
     def reset_video_processing(self):
         from myUtils.video_processor import DEFAULT_VIDEO_PROCESSING_CONFIG
 
         self.settings_service.save_settings(self.proxy.text(), dict(DEFAULT_VIDEO_PROCESSING_CONFIG))
+        self._dirty = False
+        self.event_bus.settings_changed.emit()
         self.load()
 
     def _video_processing_payload(self) -> dict:
@@ -221,8 +268,10 @@ class SettingsPage(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "选择 cookies.txt", "", "Text (*.txt)")
         if path:
             self.settings_service.upload_youtube_cookie(Path(path))
+            self.event_bus.settings_changed.emit()
             self.load()
 
     def clear_youtube_cookie(self):
         self.settings_service.clear_youtube_cookie()
+        self.event_bus.settings_changed.emit()
         self.load()

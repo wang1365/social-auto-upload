@@ -26,7 +26,7 @@ from sau_core.services import (
     SettingsService,
     ensure_runtime_schema,
 )
-from sau_desktop._shared import APP_STYLE
+from sau_desktop._shared import APP_STYLE, EventBus
 from sau_desktop.pages import (
     AboutPage,
     AccountLoginDialog,
@@ -70,6 +70,7 @@ class MainWindow(QMainWindow):
         self.download_service = DownloadService(self.processing_service)
         self.publish_service = PublishService()
         self.settings_service = SettingsService()
+        self.event_bus = EventBus()
 
         sidebar = QWidget()
         sidebar.setObjectName("Sidebar")
@@ -91,18 +92,18 @@ class MainWindow(QMainWindow):
         self.nav.setObjectName("Navigation")
         self.stack = QStackedWidget()
         pages = [
-            ("仪表盘", DashboardPage(self.account_service, self.material_service)),
-            ("账号管理", AccountPage(self.account_service)),
-            ("素材管理", MaterialPage(self.material_service)),
-            ("下载中心", DownloadPage(self.download_service)),
-            ("发布中心", PublishPage(self.material_service, self.account_service, self.publish_service)),
-            ("系统设置", SettingsPage(self.settings_service, self.processing_service)),
+            ("仪表盘", DashboardPage(self.account_service, self.material_service, self.event_bus)),
+            ("账号管理", AccountPage(self.account_service, self.event_bus)),
+            ("素材管理", MaterialPage(self.material_service, self.event_bus)),
+            ("下载中心", DownloadPage(self.download_service, self.event_bus)),
+            ("发布中心", PublishPage(self.material_service, self.account_service, self.publish_service, self.event_bus)),
+            ("系统设置", SettingsPage(self.settings_service, self.processing_service, self.event_bus)),
             ("关于", AboutPage()),
         ]
         for title, page in pages:
             self.nav.addItem(QListWidgetItem(title))
             self.stack.addWidget(page)
-        self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
+        self.nav.currentRowChanged.connect(self._on_nav_changed)
         self.nav.setCurrentRow(0)
         sidebar_layout.addWidget(brand_block)
         sidebar_layout.addWidget(self.nav, 1)
@@ -113,6 +114,22 @@ class MainWindow(QMainWindow):
         splitter.setSizes([148, 1172])
         self.setCentralWidget(splitter)
         self.statusBar().showMessage("就绪")
+
+    def _on_nav_changed(self, index):
+        # Check for unsaved changes on current page before switching
+        current = self.stack.currentWidget()
+        if hasattr(current, "check_unsaved") and not current.check_unsaved():
+            # User chose not to leave, revert navigation
+            self.nav.blockSignals(True)
+            self.nav.setCurrentRow(self.stack.currentIndex())
+            self.nav.blockSignals(False)
+            return
+        self.stack.setCurrentIndex(index)
+        page = self.stack.widget(index)
+        if hasattr(page, "refresh"):
+            page.refresh()
+        elif hasattr(page, "load"):
+            page.load()
 
     def refresh_current_page(self):
         page = self.stack.currentWidget()

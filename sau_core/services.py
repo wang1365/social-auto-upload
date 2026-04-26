@@ -53,6 +53,8 @@ SYSTEM_COOKIE_DIR = COOKIE_DIR / "system"
 
 ProgressCallback = Callable[[dict], None]
 
+PLATFORM_CHOICES = [(1, "小红书"), (2, "视频号"), (3, "抖音"), (4, "快手")]
+
 
 class ServiceError(RuntimeError):
     def __init__(self, message: str, code: str = "service_error"):
@@ -117,6 +119,7 @@ def ensure_runtime_schema() -> None:
             ("display_tags", "TEXT"),
             ("processing_profile", "TEXT"),
             ("processing_config", "TEXT"),
+            ("video_resolution", "TEXT"),
         ]:
             if column_name not in columns:
                 cursor.execute(f"ALTER TABLE file_records ADD COLUMN {column_name} {column_type}")
@@ -168,6 +171,7 @@ def create_material_record(
     display_tags=None,
     processing_profile=None,
     processing_config=None,
+    video_resolution=None,
 ):
     if isinstance(display_tags, list):
         display_tags_value = json.dumps(display_tags, ensure_ascii=False)
@@ -190,8 +194,8 @@ def create_material_record(
             INSERT INTO file_records (
                 filename, filesize, file_path, source_url, source_type, video_title, video_title_zh,
                 video_description, subtitle_path, material_type, parent_file_id, display_tags,
-                processing_profile, processing_config
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                processing_profile, processing_config, video_resolution
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 filename,
@@ -208,6 +212,7 @@ def create_material_record(
                 display_tags_value,
                 processing_profile,
                 processing_config_value,
+                video_resolution,
             ),
         )
         conn.commit()
@@ -755,6 +760,7 @@ class DownloadService:
                 embedded_path = embed_subtitle_into_video(final_path, subtitle_path)
                 if embedded_path:
                     final_path = embedded_path
+            resolution = detect_video_resolution(final_path.name) or metadata.get("resolution")
             material_id = create_material_record(
                 filename=final_path.name,
                 filepath=final_path.name,
@@ -766,6 +772,7 @@ class DownloadService:
                 video_description=metadata.get("description"),
                 subtitle_path=subtitle_relative,
                 display_tags=["YouTube"],
+                video_resolution=resolution,
             )
             self._update_task(
                 task_id,
@@ -777,7 +784,7 @@ class DownloadService:
                 filename=final_path.name,
                 file_path=final_path.name,
                 file_size_mb=round(final_path.stat().st_size / (1024 * 1024), 2),
-                video_resolution=detect_video_resolution(final_path.name) or metadata.get("resolution"),
+                video_resolution=resolution,
                 video_title=title,
                 video_title_zh=translated_title,
                 video_description=metadata.get("description"),
@@ -879,9 +886,11 @@ class DownloadService:
         with db_connection() as conn:
             rows = conn.execute(
                 """
-                SELECT * FROM file_records
-                WHERE source_type = 'youtube'
-                ORDER BY upload_time DESC, id DESC
+                SELECT fr.*, pf.id AS proc_id, pf.filename AS proc_filename, pf.file_path AS proc_file_path
+                FROM file_records fr
+                LEFT JOIN file_records pf ON pf.parent_file_id = fr.id AND pf.material_type = 'processed'
+                WHERE fr.source_type = 'youtube'
+                ORDER BY fr.upload_time DESC, fr.id DESC
                 """
             ).fetchall()
         return [self._serialize_youtube_task(self._build_persisted_youtube_task(row)) for row in rows]
@@ -889,7 +898,15 @@ class DownloadService:
     def _build_persisted_youtube_task(self, row):
         row_dict = dict(row)
         created_at = row_dict.get("upload_time")
-        processed = self._find_processed_material(row_dict["id"])
+        # Use cached resolution from DB instead of calling ffprobe every refresh
+        resolution = row_dict.get("video_resolution") or ""
+        # If not cached yet, probe and update (one-time migration)
+        if not resolution and row_dict.get("file_path"):
+            resolution = detect_video_resolution(row_dict.get("file_path"))
+            if resolution:
+                with db_connection() as conn:
+                    conn.execute("UPDATE file_records SET video_resolution = ? WHERE id = ?", (resolution, row_dict["id"]))
+        has_processed = row_dict.get("proc_id") is not None
         return {
             **self._new_task(f"material-{row_dict['id']}", row_dict.get("source_url"), bool(row_dict.get("subtitle_path"))),
             "status": "success",
@@ -900,33 +917,20 @@ class DownloadService:
             "video_title": row_dict.get("video_title"),
             "video_title_zh": row_dict.get("video_title_zh"),
             "video_description": row_dict.get("video_description"),
-            "video_resolution": detect_video_resolution(row_dict.get("file_path")),
+            "video_resolution": resolution,
             "subtitle_file_path": row_dict.get("subtitle_path"),
             "filename": row_dict.get("filename"),
             "file_path": row_dict.get("file_path"),
             "file_size_mb": row_dict.get("filesize"),
-            "processing_status": "success" if processed else None,
-            "processing_progress_text": "处理完成" if processed else None,
-            "processing_progress_percent": 100 if processed else None,
-            "processed_material_id": processed.get("id") if processed else None,
-            "processed_filename": processed.get("filename") if processed else None,
-            "processed_file_path": processed.get("file_path") if processed else None,
+            "processing_status": "success" if has_processed else None,
+            "processing_progress_text": "处理完成" if has_processed else None,
+            "processing_progress_percent": 100 if has_processed else None,
+            "processed_material_id": row_dict.get("proc_id"),
+            "processed_filename": row_dict.get("proc_filename"),
+            "processed_file_path": row_dict.get("proc_file_path"),
             "created_at": created_at,
             "updated_at": created_at,
         }
-
-    def _find_processed_material(self, parent_file_id: int) -> dict | None:
-        with db_connection() as conn:
-            row = conn.execute(
-                """
-                SELECT * FROM file_records
-                WHERE parent_file_id = ? AND material_type = 'processed'
-                ORDER BY upload_time DESC, id DESC
-                LIMIT 1
-                """,
-                (parent_file_id,),
-            ).fetchone()
-        return dict(row) if row else None
 
     def _serialize_youtube_task(self, task, include_subtitle_text=False):
         subtitle_text = task.get("subtitle_text") or ""
@@ -998,84 +1002,6 @@ class DownloadService:
             "speed_text": (status.get("_speed_str") or "").strip() or None,
             "eta_text": (status.get("_eta_str") or "").strip() or None,
         }
-
-    def delete_youtube_task(self, task_id: str) -> dict:
-        """Delete a download task and its associated files"""
-        # First check if it's an in-memory task
-        with self.lock:
-            task = self.tasks.get(task_id)
-            if task:
-                # Remove from in-memory tasks
-                del self.tasks[task_id]
-                # If it has a material ID, delete the material
-                if task.get("material_id"):
-                    material_service = MaterialService()
-                    return material_service.delete_material(task["material_id"])
-                return {"taskId": task_id, "deleted": True}
-        
-        # Check if it's a persisted task (material record)
-        if task_id.startswith("material-"):
-            try:
-                material_id = int(task_id.split("-", 1)[1])
-                material_service = MaterialService()
-                return material_service.delete_material(material_id)
-            except (ValueError, ServiceError):
-                raise ServiceError("Task not found", "not_found")
-        
-        raise ServiceError("Task not found", "not_found")
-
-    def delete_youtube_tasks(self, task_ids: Iterable[str]) -> dict:
-        """Delete multiple download tasks and their associated files"""
-        deleted_items = []
-        missing_ids = []
-        
-        for task_id in task_ids:
-            try:
-                deleted = self.delete_youtube_task(task_id)
-                deleted_items.append({"taskId": task_id, **deleted})
-            except ServiceError:
-                missing_ids.append(task_id)
-        
-        return {"deleted": deleted_items, "missingIds": missing_ids}
-
-    def delete_youtube_task(self, task_id: str) -> dict:
-        """Delete a download task and its associated files"""
-        # First check if it's an in-memory task
-        with self.lock:
-            task = self.tasks.get(task_id)
-            if task:
-                # Remove from in-memory tasks
-                del self.tasks[task_id]
-                # If it has a material ID, delete the material
-                if task.get("material_id"):
-                    material_service = MaterialService()
-                    return material_service.delete_material(task["material_id"])
-                return {"taskId": task_id, "deleted": True}
-        
-        # Check if it's a persisted task (material record)
-        if task_id.startswith("material-"):
-            try:
-                material_id = int(task_id.split("-", 1)[1])
-                material_service = MaterialService()
-                return material_service.delete_material(material_id)
-            except (ValueError, ServiceError):
-                raise ServiceError("Task not found", "not_found")
-        
-        raise ServiceError("Task not found", "not_found")
-
-    def delete_youtube_tasks(self, task_ids: Iterable[str]) -> dict:
-        """Delete multiple download tasks and their associated files"""
-        deleted_items = []
-        missing_ids = []
-        
-        for task_id in task_ids:
-            try:
-                deleted = self.delete_youtube_task(task_id)
-                deleted_items.append({"taskId": task_id, **deleted})
-            except ServiceError:
-                missing_ids.append(task_id)
-        
-        return {"deleted": deleted_items, "missingIds": missing_ids}
 
     def delete_youtube_task(self, task_id: str) -> dict:
         """Delete a download task and its associated files"""

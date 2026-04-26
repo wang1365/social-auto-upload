@@ -6,14 +6,15 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QWidget, QVBoxLayout
 
 from sau_core.services import AccountService, MaterialService
-from sau_desktop._shared import DenseTable, make_button, page_header
+from sau_desktop._shared import DenseTable, EventBus, make_button, page_header
 
 
 class DashboardPage(QWidget):
-    def __init__(self, account_service: AccountService, material_service: MaterialService):
+    def __init__(self, account_service: AccountService, material_service: MaterialService, event_bus: EventBus):
         super().__init__()
         self.account_service = account_service
         self.material_service = material_service
+        self.event_bus = event_bus
         self.kpis = QLabel()
         self.kpis.setObjectName("Kpi")
         self.recent_table = DenseTable(["ID", "文件名", "来源", "大小(MB)", "时间"], [70, 360, 120, 100, 180])
@@ -26,7 +27,9 @@ class DashboardPage(QWidget):
         layout.addWidget(self.kpis)
         layout.addWidget(refresh, alignment=Qt.AlignLeft)
         layout.addWidget(self.recent_table, 1)
-        self.refresh()
+
+        self.event_bus.accounts_changed.connect(self.refresh)
+        self.event_bus.materials_changed.connect(self.refresh)
 
     def refresh(self):
         accounts = self.account_service.list_accounts()

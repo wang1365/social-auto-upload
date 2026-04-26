@@ -23,17 +23,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from sau_core.services import AccountService
-from sau_desktop._shared import DenseTable, make_button, page_header, run_background
+from sau_core.services import AccountService, PLATFORM_CHOICES
+from sau_desktop._shared import DebouncedSearch, DenseTable, EventBus, make_button, page_header, run_background
 
 
 class AccountPage(QWidget):
-    def __init__(self, account_service: AccountService):
+    def __init__(self, account_service: AccountService, event_bus: EventBus):
         super().__init__()
         self.account_service = account_service
+        self.event_bus = event_bus
         self.search = QLineEdit()
         self.search.setPlaceholderText("搜索账号、平台、Cookie")
-        self.search.textChanged.connect(self.refresh)
+        DebouncedSearch(self.search, self.refresh)
         self.table = DenseTable(["ID", "平台", "用户名", "Cookie", "状态"], [70, 100, 180, 360, 100])
 
         toolbar = QHBoxLayout()
@@ -56,7 +57,8 @@ class AccountPage(QWidget):
         layout.addWidget(self.search)
         layout.addLayout(toolbar)
         layout.addWidget(self.table, 1)
-        self.refresh()
+
+        self.event_bus.accounts_changed.connect(self.refresh)
 
     def selected_account(self):
         row = self.table.currentRow()
@@ -82,13 +84,13 @@ class AccountPage(QWidget):
     def add_account(self):
         dialog = AccountLoginDialog(self.account_service, self)
         if dialog.exec() == QDialog.Accepted:
-            self.refresh()
+            self.event_bus.accounts_changed.emit()
 
     def validate_accounts(self):
         def work():
             return asyncio.run(self.account_service.list_validated_accounts())
 
-        run_background(self, work, lambda _: self.refresh())
+        run_background(self, work, lambda _: self.event_bus.accounts_changed.emit())
 
     def import_cookie(self):
         account = self.selected_account()
@@ -97,7 +99,7 @@ class AccountPage(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "选择 Cookie JSON", "", "JSON (*.json)")
         if path:
             self.account_service.import_cookie(account["id"], Path(path))
-            self.refresh()
+            self.event_bus.accounts_changed.emit()
 
     def open_cookie(self):
         account = self.selected_account()
@@ -107,26 +109,40 @@ class AccountPage(QWidget):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def delete_account(self):
-        account = self.selected_account()
-        if not account:
+        checked = self.table.checked_rows()
+        if not checked:
+            account = self.selected_account()
+            if not account:
+                return
+            if QMessageBox.question(self, "确认删除", "删除选中账号和 Cookie 文件？") == QMessageBox.Yes:
+                self.account_service.delete_account(account["id"])
+                self.event_bus.accounts_changed.emit()
             return
-        if QMessageBox.question(self, "确认删除", "删除选中账号和 Cookie 文件？") == QMessageBox.Yes:
-            self.account_service.delete_account(account["id"])
-            self.refresh()
+        ids = []
+        for row in checked:
+            try:
+                ids.append(int(self.table.item(row, 0).text()))
+            except (ValueError, AttributeError):
+                pass
+        if not ids:
+            return
+        if QMessageBox.question(self, "批量删除", f"确定删除 {len(ids)} 个账号？") == QMessageBox.Yes:
+            for aid in ids:
+                self.account_service.delete_account(aid)
+            self.event_bus.accounts_changed.emit()
 
 
 class AccountLoginDialog(QDialog):
     login_message = Signal(str)
 
-    PLATFORM_OPTIONS = [("小红书", 1), ("视频号", 2), ("抖音", 3), ("快手", 4)]
-
     def __init__(self, account_service: AccountService, parent=None):
         super().__init__(parent)
         self.account_service = account_service
+        self._login_active = True
         self.setWindowTitle("添加账号")
         self.setMinimumWidth(460)
         self.platform = QComboBox()
-        for label, value in self.PLATFORM_OPTIONS:
+        for label, value in PLATFORM_CHOICES:
             self.platform.addItem(label, value)
         self.username = QLineEdit()
         self.username.setPlaceholderText("请输入账号名称")
@@ -140,7 +156,7 @@ class AccountLoginDialog(QDialog):
         self.buttons.button(QDialogButtonBox.Ok).setText("开始登录")
         self.buttons.button(QDialogButtonBox.Cancel).setText("取消")
         self.buttons.accepted.connect(self.start_login)
-        self.buttons.rejected.connect(self.reject)
+        self.buttons.rejected.connect(self._cancel_login)
         self.login_message.connect(self._handle_login_message)
 
         form = QFormLayout()
@@ -156,6 +172,14 @@ class AccountLoginDialog(QDialog):
         layout.addWidget(self.status)
         layout.addWidget(self.buttons)
 
+    def _cancel_login(self):
+        self._login_active = False
+        self.reject()
+
+    def closeEvent(self, event):
+        self._login_active = False
+        super().closeEvent(event)
+
     def start_login(self):
         username = self.username.text().strip()
         if not username:
@@ -168,10 +192,17 @@ class AccountLoginDialog(QDialog):
         self.account_service.start_login(
             int(self.platform.currentData()),
             username,
-            callback=lambda event: self.login_message.emit(str(event.get("message", ""))),
+            callback=self._on_login_event,
         )
 
+    def _on_login_event(self, event):
+        if not self._login_active:
+            return
+        self.login_message.emit(str(event.get("message", "")))
+
     def _handle_login_message(self, message: str):
+        if not self._login_active:
+            return
         if message == "200":
             self.status.setText("添加成功，正在刷新账号列表...")
             self.accept()

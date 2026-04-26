@@ -7,7 +7,6 @@ from urllib.parse import parse_qs, urlparse
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
-from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -27,19 +26,20 @@ from PySide6.QtWidgets import (
 )
 
 from sau_core.services import DownloadService, ServiceError, VIDEO_DIR
-from sau_desktop._shared import DenseTable, make_button, page_header
+from sau_desktop._shared import DenseTable, EventBus, make_button, page_header, run_background
 
 
 class DownloadPage(QWidget):
     refresh_requested = Signal()
 
-    def __init__(self, download_service: DownloadService):
+    def __init__(self, download_service: DownloadService, event_bus: EventBus):
         super().__init__()
         self.download_service = download_service
+        self.event_bus = event_bus
         self.refresh_requested.connect(self.refresh)
         self.detail_dialog = None
         self.table = DenseTable(["下载时间", "下载进度", "标题", "分辨率", "文件大小"], [165, 280, 420, 100, 100])
-        self.table.doubleClicked.connect(lambda _index: self.open_selected_task_detail())
+        self.table.doubleClicked.connect(lambda _: self.open_selected_task_detail())
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.show_context_menu)
 
@@ -56,7 +56,8 @@ class DownloadPage(QWidget):
         layout.addWidget(page_header("下载中心", "YouTube 下载任务、进度和结果素材"))
         layout.addLayout(action_row)
         layout.addWidget(self.table, 1)
-        self.refresh()
+
+        self.event_bus.materials_changed.connect(self.refresh)
 
     def create_task(self):
         dialog = CreateDownloadDialog(self)
@@ -83,7 +84,12 @@ class DownloadPage(QWidget):
         self.detail_dialog.activateWindow()
 
     def refresh(self):
-        tasks = self.download_service.list_youtube_tasks()
+        run_background(self, self._fetch_tasks, on_done=self._apply_tasks)
+
+    def _fetch_tasks(self):
+        return self.download_service.list_youtube_tasks()
+
+    def _apply_tasks(self, tasks):
         self.table.set_rows(
             [
                 [
@@ -144,19 +150,20 @@ class DownloadPage(QWidget):
         if reply == QMessageBox.Yes:
             try:
                 self.download_service.delete_youtube_task(task_id)
+                self.event_bus.materials_changed.emit()
                 self.refresh()
                 QMessageBox.information(self, "删除成功", "下载任务已删除")
             except Exception as e:
                 QMessageBox.warning(self, "删除失败", f"删除任务时出错: {str(e)}")
 
     def delete_selected_tasks(self):
-        selected_rows = self.table.selectionModel().selectedRows()
-        if not selected_rows:
+        checked = self.table.checked_rows()
+        if not checked:
             return
         task_ids = []
         task_titles = []
-        for index in selected_rows:
-            task = self.table.item(index.row(), 0).data(Qt.UserRole + 1)
+        for row in checked:
+            task = self.table.item(row, 0).data(Qt.UserRole + 1)
             task_id = task.get("taskId")
             if task_id:
                 task_ids.append(task_id)
@@ -173,6 +180,7 @@ class DownloadPage(QWidget):
         if reply == QMessageBox.Yes:
             try:
                 result = self.download_service.delete_youtube_tasks(task_ids)
+                self.event_bus.materials_changed.emit()
                 self.refresh()
                 QMessageBox.information(self, "删除成功", f"成功删除 {len(result.get('deleted', []))} 个任务")
             except Exception as e:
@@ -349,20 +357,42 @@ class DownloadTaskDetailDialog(QDialog):
 
     def _source_preview_card(self):
         group = QGroupBox("源视频")
-        if QApplication.instance() and QApplication.platformName().lower() == "offscreen":
-            body = QLabel("测试环境不加载 WebEngine")
-            body.setAlignment(Qt.AlignCenter)
-            body.setObjectName("PreviewPlaceholder")
-            web = None
-        else:
-            web = QWebEngineView()
-            web.setMinimumHeight(150)
-            body = web
+        placeholder = QLabel("点击加载源视频预览")
+        placeholder.setAlignment(Qt.AlignCenter)
+        placeholder.setObjectName("PreviewPlaceholder")
+        load_button = make_button("加载预览")
+        load_button.setEnabled(False)
+
         layout = QVBoxLayout(group)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
-        layout.addWidget(body, 1)
-        return {"group": group, "body": body, "web": web, "source_url": None}
+        layout.addWidget(placeholder, 1)
+        layout.addWidget(load_button)
+
+        return {
+            "group": group,
+            "placeholder": placeholder,
+            "load_button": load_button,
+            "web": None,
+            "source_url": None,
+        }
+
+    def _lazy_load_web_engine(self):
+        """Lazily create QWebEngineView only when needed."""
+        preview = self.source_preview
+        if preview["web"] is not None:
+            return
+        if QApplication.instance() and QApplication.platformName().lower() == "offscreen":
+            preview["placeholder"].setText("测试环境不加载 WebEngine")
+            return
+        from PySide6.QtWebEngineWidgets import QWebEngineView
+        web = QWebEngineView()
+        web.setMinimumHeight(150)
+        layout = preview["group"].layout()
+        layout.removeWidget(preview["placeholder"])
+        preview["placeholder"].deleteLater()
+        layout.insertWidget(0, web, 1)
+        preview["web"] = web
 
     def _media_preview_card(self, title: str):
         group = QGroupBox(title)
@@ -407,19 +437,24 @@ class DownloadTaskDetailDialog(QDialog):
         return self.download_service.get_youtube_task(self.task_id)
 
     def _update_source_preview(self, source_url: str | None):
+        preview = self.source_preview
         if not source_url:
-            if isinstance(self.source_preview["body"], QLabel):
-                self.source_preview["body"].setText("等待视频链接")
+            preview["placeholder"].setText("等待视频链接")
+            preview["load_button"].setEnabled(False)
             return
-        if self.source_preview["source_url"] == source_url:
+        if preview["source_url"] == source_url:
             return
-        self.source_preview["source_url"] = source_url
+        preview["source_url"] = source_url
         embed_url = self._youtube_embed_url(source_url)
-        web = self.source_preview.get("web")
+
+        # Lazy load: create WebEngine on first URL
+        self._lazy_load_web_engine()
+        web = preview.get("web")
         if web:
             web.load(QUrl(embed_url or source_url))
-        elif isinstance(self.source_preview["body"], QLabel):
-            self.source_preview["body"].setText("源视频将在正式窗口中内嵌播放")
+            preview["load_button"].setVisible(False)
+        else:
+            preview["placeholder"].setText("源视频将在正式窗口中内嵌播放")
 
     def _update_media_preview(self, preview, text: str, relative_path: str | None):
         if not relative_path:
@@ -460,4 +495,9 @@ class DownloadTaskDetailDialog(QDialog):
     def closeEvent(self, event):
         for preview in (self.local_preview, self.processed_preview):
             preview["player"].stop()
+        # Clean up WebEngine if it was created
+        web = self.source_preview.get("web")
+        if web:
+            web.stop()
+            web.setUrl(QUrl(""))
         super().closeEvent(event)

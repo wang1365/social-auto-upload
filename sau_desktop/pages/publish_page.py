@@ -15,20 +15,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from sau_core.services import AccountService, MaterialService, PublishService
-from sau_desktop._shared import DenseTable, make_button, page_header, run_background
+from sau_core.services import AccountService, MaterialService, PLATFORM_CHOICES, PublishService
+from sau_desktop._shared import DenseTable, EventBus, make_button, page_header, run_background
 
 
 class PublishPage(QWidget):
-    def __init__(self, material_service: MaterialService, account_service: AccountService, publish_service: PublishService):
+    def __init__(self, material_service: MaterialService, account_service: AccountService, publish_service: PublishService, event_bus: EventBus):
         super().__init__()
         self.material_service = material_service
         self.account_service = account_service
         self.publish_service = publish_service
+        self.event_bus = event_bus
         self.materials = DenseTable(["ID", "文件名", "路径"], [70, 300, 460])
         self.accounts = DenseTable(["ID", "平台", "用户名"], [70, 100, 220])
         self.platform = QComboBox()
-        for value, text in [(1, "小红书"), (2, "视频号"), (3, "抖音"), (4, "快手")]:
+        for value, text in PLATFORM_CHOICES:
             self.platform.addItem(text, value)
         self.title = QLineEdit()
         self.title.setPlaceholderText("发布标题")
@@ -61,7 +62,9 @@ class PublishPage(QWidget):
         layout.addLayout(form)
         layout.addLayout(actions)
         layout.addWidget(self.log)
-        self.refresh()
+
+        self.event_bus.accounts_changed.connect(self.refresh)
+        self.event_bus.materials_changed.connect(self.refresh)
 
     def refresh(self):
         self.materials.set_rows([[m.get("id"), m.get("filename"), m.get("file_path")] for m in self.material_service.list_materials()])

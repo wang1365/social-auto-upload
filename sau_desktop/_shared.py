@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtWidgets import QStyle, QStyleOptionButton
 from PySide6.QtWidgets import (
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QHeaderView,
     QTableWidget,
     QTableWidgetItem,
     QWidget,
@@ -174,6 +177,24 @@ QGroupBox::title {
 """
 
 
+class EventBus(QObject):
+    """Cross-page communication bus for data change notifications."""
+    accounts_changed = Signal()
+    materials_changed = Signal()
+    settings_changed = Signal()
+
+
+class DebouncedSearch:
+    """Debounce search input: only fires callback after user stops typing."""
+
+    def __init__(self, line_edit: QLineEdit, callback, delay_ms: int = 300):
+        self._timer = QTimer()
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(delay_ms)
+        self._timer.timeout.connect(callback)
+        line_edit.textChanged.connect(lambda: self._timer.start())
+
+
 class Worker(QObject):
     finished = Signal(object)
     failed = Signal(str)
@@ -235,6 +256,57 @@ def page_header(title: str, subtitle: str = "") -> QWidget:
     return container
 
 
+class _CheckableHeaderView(QHeaderView):
+    """Horizontal header that draws a tri-state checkbox in the first column."""
+
+    select_all_toggled = Signal(bool)  # True = check all, False = uncheck all
+
+    def __init__(self, parent=None):
+        super().__init__(Qt.Horizontal, parent)
+        self._check_state = Qt.Unchecked
+        self.setSectionsClickable(True)
+
+    def checkState(self):
+        return self._check_state
+
+    def setCheckState(self, state):
+        if self._check_state == state:
+            return
+        self._check_state = state
+        self.viewport().update()
+
+    def paintSection(self, painter, rect, logicalIndex):
+        super().paintSection(painter, rect, logicalIndex)
+        if logicalIndex != 0:
+            return
+        option = QStyleOptionButton()
+        option.rect = self._checkbox_rect(rect)
+        option.state = QStyle.State_Enabled | QStyle.State_Active
+        if self._check_state == Qt.Checked:
+            option.state |= QStyle.State_On
+        elif self._check_state == Qt.PartiallyChecked:
+            option.state |= QStyle.State_NoChange
+        else:
+            option.state |= QStyle.State_Off
+        self.style().drawControl(QStyle.CE_CheckBox, option, painter, self)
+
+    def _checkbox_rect(self, section_rect):
+        size = self.style().pixelMetric(QStyle.PM_IndicatorWidth, None, self)
+        x = section_rect.x() + (section_rect.width() - size) // 2
+        y = section_rect.y() + (section_rect.height() - size) // 2
+        from PySide6.QtCore import QRect
+        return QRect(x, y, size, size)
+
+    def mousePressEvent(self, event):
+        if self.logicalIndexAt(event.pos()) == 0:
+            new_state = Qt.Unchecked if self._check_state == Qt.Checked else Qt.Checked
+            self._check_state = new_state
+            self.viewport().update()
+            self.select_all_toggled.emit(new_state == Qt.Checked)
+        else:
+            super().mousePressEvent(event)
+
+
 class DenseTable(QTableWidget):
     def __init__(self, headers: list[str], column_widths: list[int] | None = None):
         # 添加复选框列到表头
@@ -243,7 +315,6 @@ class DenseTable(QTableWidget):
         self.column_widths = column_widths or []
         self.setHorizontalHeaderLabels(headers_with_checkbox)
         self.setAlternatingRowColors(True)
-        self.setSortingEnabled(True)
         self.setSelectionBehavior(QTableWidget.SelectRows)
         self.setSelectionMode(QTableWidget.MultiSelection)
         self.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -251,7 +322,6 @@ class DenseTable(QTableWidget):
         self.setWordWrap(False)
         self.verticalHeader().setVisible(False)
         self.verticalHeader().setDefaultSectionSize(28)
-        self.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.horizontalHeader().setStretchLastSection(True)
         self.horizontalHeader().setMinimumSectionSize(54)
         # 为复选框列设置固定宽度
@@ -260,8 +330,52 @@ class DenseTable(QTableWidget):
             self.setColumnWidth(index + 1, width)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
+        # 替换默认 header 为带全选框的自定义 header
+        self._header = _CheckableHeaderView(self)
+        self.setHorizontalHeader(self._header)
+        self._header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._header.select_all_toggled.connect(self._on_select_all)
+
+        self._updating_checks = False
+        self.itemChanged.connect(self._on_item_changed)
+
+    def _on_select_all(self, checked: bool):
+        self._updating_checks = True
+        try:
+            for row in range(self.rowCount()):
+                item = self.item(row, 0)
+                if item:
+                    item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+        finally:
+            self._updating_checks = False
+
+    def _on_item_changed(self, item: QTableWidgetItem):
+        if item.column() != 0 or self._updating_checks:
+            return
+        total = self.rowCount()
+        if total == 0:
+            self._header.setCheckState(Qt.Unchecked)
+            return
+        checked = sum(
+            1 for r in range(total)
+            if self.item(r, 0) and self.item(r, 0).checkState() == Qt.Checked
+        )
+        if checked == total:
+            self._header.setCheckState(Qt.Checked)
+        elif checked > 0:
+            self._header.setCheckState(Qt.PartiallyChecked)
+        else:
+            self._header.setCheckState(Qt.Unchecked)
+
+    def checked_rows(self) -> list[int]:
+        """Return row indices where the checkbox is checked."""
+        return [
+            r for r in range(self.rowCount())
+            if self.item(r, 0) and self.item(r, 0).checkState() == Qt.Checked
+        ]
+
     def set_rows(self, rows: list[list[object]], payloads: list[object] | None = None):
-        self.setSortingEnabled(False)
+        self._updating_checks = True
         self.setRowCount(len(rows))
         payloads = payloads or [None] * len(rows)
         for row_index, row in enumerate(rows):
@@ -284,7 +398,9 @@ class DenseTable(QTableWidget):
         self.setColumnWidth(0, 40)
         for index, width in enumerate(self.column_widths):
             self.setColumnWidth(index + 1, width)
-        self.setSortingEnabled(True)
+        self._updating_checks = False
+        # 重置全选框状态
+        self._header.setCheckState(Qt.Unchecked)
     
     def get_payload(self, row: int) -> object:
         """Get the payload for a specific row"""
