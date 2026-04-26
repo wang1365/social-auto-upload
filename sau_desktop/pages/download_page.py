@@ -1,4 +1,4 @@
-"""下载中心页面及相关对话框."""
+"""下载中心页面及相关对话框 — 选择状态栏优化."""
 
 from __future__ import annotations
 
@@ -38,10 +38,15 @@ class DownloadPage(QWidget):
         self.event_bus = event_bus
         self.refresh_requested.connect(self.refresh)
         self.detail_dialog = None
+        # 下载中心表格本身没有 ID 列，已合理
         self.table = DenseTable(["下载时间", "下载进度", "标题", "分辨率", "文件大小"], [165, 280, 420, 100, 100])
         self.table.doubleClicked.connect(lambda _: self.open_selected_task_detail())
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.show_context_menu)
+
+        # P2: 选择状态栏
+        self.selection_label = QLabel("")
+        self.selection_label.setObjectName("SelectionInfo")
 
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
@@ -49,15 +54,25 @@ class DownloadPage(QWidget):
         action_row.addWidget(make_button("刷新", self.refresh))
         action_row.addWidget(make_button("批量删除", self.delete_selected_tasks, danger=True))
         action_row.addStretch()
+        action_row.addWidget(self.selection_label)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setContentsMargins(14, 10, 14, 10)
         layout.setSpacing(8)
         layout.addWidget(page_header("下载中心", "YouTube 下载任务、进度和结果素材"))
         layout.addLayout(action_row)
         layout.addWidget(self.table, 1)
 
+        # P2: 连接选择变化信号
+        self.table.selection_changed.connect(self._update_selection_info)
+
         self.event_bus.materials_changed.connect(self.refresh)
+
+    def _update_selection_info(self, count: int):
+        if count > 0:
+            self.selection_label.setText(f"已选 {count} 项")
+        else:
+            self.selection_label.setText("")
 
     def create_task(self):
         dialog = CreateDownloadDialog(self)

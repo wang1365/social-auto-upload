@@ -1,4 +1,4 @@
-"""账号管理页面及登录对话框."""
+"""账号管理页面及登录对话框 — 精简列 + payload + 选择状态栏."""
 
 from __future__ import annotations
 
@@ -24,7 +24,10 @@ from PySide6.QtWidgets import (
 )
 
 from sau_core.services import AccountService, PLATFORM_CHOICES
-from sau_desktop._shared import DebouncedSearch, DenseTable, EventBus, make_button, page_header, run_background
+from sau_desktop._shared import (
+    DebouncedSearch, DenseTable, EventBus, make_button, page_header, run_background,
+    status_dot,
+)
 
 
 class AccountPage(QWidget):
@@ -33,53 +36,76 @@ class AccountPage(QWidget):
         self.account_service = account_service
         self.event_bus = event_bus
         self.search = QLineEdit()
-        self.search.setPlaceholderText("搜索账号、平台、Cookie")
+        self.search.setPlaceholderText("搜索账号、平台...")
         DebouncedSearch(self.search, self.refresh)
-        self.table = DenseTable(["ID", "平台", "用户名", "Cookie", "状态"], [70, 100, 180, 360, 100])
+
+        # P0: 隐藏 ID 列和 Cookie 路径列（路径太长且用户不需要看）
+        #     状态用颜色指示器更直观
+        self.table = DenseTable(["平台", "用户名", "状态"], [100, 180, 80])
+
+        # P2: 选中数量状态栏
+        self.selection_label = QLabel("")
+        self.selection_label.setObjectName("SelectionInfo")
 
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
         for button in [
             make_button("添加账号", self.add_account, primary=True),
+            make_button("刷新", self.refresh),
             make_button("校验 Cookie", self.validate_accounts, primary=True),
             make_button("导入 Cookie", self.import_cookie),
             make_button("打开 Cookie", self.open_cookie),
             make_button("删除账号", self.delete_account, danger=True),
-            make_button("刷新", self.refresh),
         ]:
             toolbar.addWidget(button)
         toolbar.addStretch()
+        toolbar.addWidget(self.selection_label)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setContentsMargins(14, 10, 14, 10)
         layout.setSpacing(8)
         layout.addWidget(page_header("账号管理", "维护各平台账号 Cookie 和校验状态"))
         layout.addWidget(self.search)
         layout.addLayout(toolbar)
         layout.addWidget(self.table, 1)
 
+        # P2: 连接选择变化信号
+        self.table.selection_changed.connect(self._update_selection_info)
+
         self.event_bus.accounts_changed.connect(self.refresh)
 
-    def selected_account(self):
+    def _update_selection_info(self, count: int):
+        if count > 0:
+            self.selection_label.setText(f"已选 {count} 项")
+        else:
+            self.selection_label.setText("")
+
+    def selected_account(self) -> dict | None:
         row = self.table.currentRow()
         if row < 0:
             return None
-        return {"id": int(self.table.item(row, 0).text()), "filePath": self.table.item(row, 3).text()}
+        # P0: 使用 payload 获取完整数据
+        payload = self.table.get_payload(row)
+        if payload and isinstance(payload, dict):
+            return {"id": payload.get("id"), "filePath": payload.get("filePath")}
+        return None
 
     def refresh(self):
         keyword = self.search.text().strip().lower()
         rows = []
+        payloads = []
         for account in self.account_service.list_accounts():
+            is_ok = bool(account.get("status"))
+            status_text = "正常" if is_ok else "未验证"
             values = [
-                account.get("id"),
                 account.get("platform"),
                 account.get("userName"),
-                account.get("filePath"),
-                "正常" if account.get("status") else "未验证",
+                status_text,
             ]
-            if not keyword or keyword in " ".join(str(value).lower() for value in values):
+            if not keyword or keyword in " ".join(str(v).lower() for v in values):
                 rows.append(values)
-        self.table.set_rows(rows)
+                payloads.append(account)
+        self.table.set_rows(rows, payloads=payloads)
 
     def add_account(self):
         dialog = AccountLoginDialog(self.account_service, self)
@@ -120,10 +146,9 @@ class AccountPage(QWidget):
             return
         ids = []
         for row in checked:
-            try:
-                ids.append(int(self.table.item(row, 0).text()))
-            except (ValueError, AttributeError):
-                pass
+            payload = self.table.get_payload(row)
+            if payload and isinstance(payload, dict) and payload.get("id"):
+                ids.append(payload["id"])
         if not ids:
             return
         if QMessageBox.question(self, "批量删除", f"确定删除 {len(ids)} 个账号？") == QMessageBox.Yes:
