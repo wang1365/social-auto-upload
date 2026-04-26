@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import sau_backend
+import sau_core.services as services
 from myUtils.video_processor import normalize_video_processing_config, process_video
 
 
@@ -34,77 +34,39 @@ class VideoProcessingConfigTests(unittest.TestCase):
         self.assertEqual(config["maxConcurrent"], 8)
         self.assertEqual(config["hardwareMode"], "cpu")
 
-    def test_settings_endpoint_saves_normalized_config(self):
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
-            original_db = sau_backend.DATABASE_PATH
-            original_video_dir = sau_backend.VIDEO_DIR
-            original_cookie_dir = sau_backend.COOKIE_DIR
-            original_system_cookie_dir = sau_backend.SYSTEM_COOKIE_DIR
-            try:
-                base = Path(tmp_dir)
-                sau_backend.DATABASE_PATH = base / "db" / "database.db"
-                sau_backend.VIDEO_DIR = base / "videoFile"
-                sau_backend.COOKIE_DIR = base / "cookiesFile"
-                sau_backend.SYSTEM_COOKIE_DIR = sau_backend.COOKIE_DIR / "system"
-                sau_backend.ensure_runtime_schema()
+    def test_processing_service_saves_normalized_config(self):
+        with isolated_runtime() as _base:
+            payload = services.ProcessingService().save_settings(
+                {"autoProcess": False, "maxConcurrent": 99, "hardwareMode": "gpu"}
+            )
 
-                client = sau_backend.app.test_client()
-                response = client.put(
-                    "/video/process/settings",
-                    json={"autoProcess": False, "maxConcurrent": 99, "hardwareMode": "gpu"},
-                )
-
-                self.assertEqual(response.status_code, 200)
-                payload = response.get_json()["data"]
-                self.assertFalse(payload["autoProcess"])
-                self.assertEqual(payload["maxConcurrent"], 8)
-                self.assertEqual(payload["hardwareMode"], "gpu")
-            finally:
-                sau_backend.DATABASE_PATH = original_db
-                sau_backend.VIDEO_DIR = original_video_dir
-                sau_backend.COOKIE_DIR = original_cookie_dir
-                sau_backend.SYSTEM_COOKIE_DIR = original_system_cookie_dir
+            self.assertFalse(payload["autoProcess"])
+            self.assertEqual(payload["maxConcurrent"], 8)
+            self.assertEqual(payload["hardwareMode"], "gpu")
 
 
 class VideoProcessingStorageTests(unittest.TestCase):
     def test_create_material_record_stores_processed_metadata(self):
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
-            original_db = sau_backend.DATABASE_PATH
-            original_video_dir = sau_backend.VIDEO_DIR
-            original_cookie_dir = sau_backend.COOKIE_DIR
-            original_system_cookie_dir = sau_backend.SYSTEM_COOKIE_DIR
-            try:
-                base = Path(tmp_dir)
-                sau_backend.DATABASE_PATH = base / "db" / "database.db"
-                sau_backend.VIDEO_DIR = base / "videoFile"
-                sau_backend.COOKIE_DIR = base / "cookiesFile"
-                sau_backend.SYSTEM_COOKIE_DIR = sau_backend.COOKIE_DIR / "system"
-                sau_backend.ensure_runtime_schema()
+        with isolated_runtime() as _base:
+            material_id = services.create_material_record(
+                filename="demo.processed.mp4",
+                filepath="demo.processed.mp4",
+                filesize_mb=1.2,
+                source_type="processed",
+                material_type="processed",
+                parent_file_id=7,
+                display_tags=["已处理", "视频处理"],
+                processing_profile="default-basic",
+                processing_config={"speed": 1.01},
+            )
+            with services.db_connection() as conn:
+                row = conn.execute("SELECT * FROM file_records WHERE id = ?", (material_id,)).fetchone()
+            material = services.build_material_row(row)
 
-                material_id = sau_backend.create_material_record(
-                    filename="demo.processed.mp4",
-                    filepath="demo.processed.mp4",
-                    filesize_mb=1.2,
-                    source_type="processed",
-                    material_type="processed",
-                    parent_file_id=7,
-                    display_tags=["已处理", "视频处理"],
-                    processing_profile="default-basic",
-                    processing_config={"speed": 1.01},
-                )
-                with sau_backend.db_connection() as conn:
-                    row = conn.execute("SELECT * FROM file_records WHERE id = ?", (material_id,)).fetchone()
-                material = sau_backend.build_material_row(row)
-
-                self.assertEqual(material["material_type"], "processed")
-                self.assertEqual(material["parent_file_id"], 7)
-                self.assertEqual(material["display_tags"], ["已处理", "视频处理"])
-                self.assertEqual(json.loads(row["processing_config"]), {"speed": 1.01})
-            finally:
-                sau_backend.DATABASE_PATH = original_db
-                sau_backend.VIDEO_DIR = original_video_dir
-                sau_backend.COOKIE_DIR = original_cookie_dir
-                sau_backend.SYSTEM_COOKIE_DIR = original_system_cookie_dir
+            self.assertEqual(material["material_type"], "processed")
+            self.assertEqual(material["parent_file_id"], 7)
+            self.assertEqual(material["display_tags"], ["已处理", "视频处理"])
+            self.assertEqual(json.loads(row["processing_config"]), {"speed": 1.01})
 
 
 class VideoProcessorCommandTests(unittest.TestCase):
@@ -158,6 +120,29 @@ class VideoProcessorCommandTests(unittest.TestCase):
             with patch("myUtils.video_processor.shutil.which", return_value=None):
                 with self.assertRaisesRegex(RuntimeError, "ffmpeg is required"):
                     process_video(input_path, Path(tmp_dir) / "output.mp4", {})
+
+
+class isolated_runtime:
+    def __enter__(self):
+        self.tmp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.original_db = services.DATABASE_PATH
+        self.original_video_dir = services.VIDEO_DIR
+        self.original_cookie_dir = services.COOKIE_DIR
+        self.original_system_cookie_dir = services.SYSTEM_COOKIE_DIR
+        base = Path(self.tmp_dir.name)
+        services.DATABASE_PATH = base / "db" / "database.db"
+        services.VIDEO_DIR = base / "videoFile"
+        services.COOKIE_DIR = base / "cookiesFile"
+        services.SYSTEM_COOKIE_DIR = services.COOKIE_DIR / "system"
+        services.ensure_runtime_schema()
+        return base
+
+    def __exit__(self, exc_type, exc, tb):
+        services.DATABASE_PATH = self.original_db
+        services.VIDEO_DIR = self.original_video_dir
+        services.COOKIE_DIR = self.original_cookie_dir
+        services.SYSTEM_COOKIE_DIR = self.original_system_cookie_dir
+        self.tmp_dir.cleanup()
 
 
 if __name__ == "__main__":

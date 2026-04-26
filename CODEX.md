@@ -1,84 +1,44 @@
 # social-auto-upload for Codex
 
-## 项目概览
+## Project Overview
 
-`social-auto-upload` 是一个多平台视频自动发布工具，支持一键上传、定时发布、账号管理等能力。
+`social-auto-upload` 1.0 is a local Python desktop client for managing social-media upload workflows. The old Vue + Flask web path has been removed from the primary product surface.
 
-支持平台包括：`Douyin`、`Bilibili`、`Xiaohongshu`、`Kuaishou`、`WeChat Channel`、`Baijiahao`、`TikTok`。
+## Tech Stack
 
-项目由 Python 后端 + Vue 前端组成，并提供命令行入口。
+- Desktop UI: `PySide6`
+- Automation: `patchright` / Playwright-compatible browser automation
+- Database: SQLite at `db/database.db`
+- Runtime files: `videoFile/`, `cookiesFile/`, `cookies/`
+- CLI: `sau ...`
 
-## 技术栈
-
-### 后端
-
-- Framework: `Flask`
-- 自动化: `playwright`
-- 数据库: `SQLite`（`db/database.db`）
-- 通信: REST API + 登录流程 SSE
-
-### 前端
-
-- Framework: `Vue.js`
-- Build: `Vite`
-- UI: `Element Plus`
-- State: `Pinia`
-- Router: `Vue Router`
-
-### CLI
-
-优先使用新入口：`sau douyin ...`（不要优先依赖旧 example 脚本）。
-
-## 快速启动
-
-### 后端
+## Running
 
 ```bash
 pip install -r requirements.txt
 playwright install chromium
 python db/createTable.py
-python sau_backend.py
+python -m sau_desktop.main
 ```
 
-后端默认地址：`http://localhost:5409`
-
-### 前端
+Editable install exposes the desktop entrypoint:
 
 ```bash
-cd sau_frontend
-npm install
-npm run dev
+pip install -e .
+sau-desktop
 ```
 
-前端默认地址：`http://localhost:5173`
+## Code Organization
 
-## CLI 常用命令
+- `sau_desktop/`: PySide6 local client.
+- `sau_core/`: local service layer used by the desktop client and compatibility imports.
+- `sau_cli.py`: command-line entrypoint.
+- `myUtils/`, `uploader/`, `utils/`: platform automation and shared utilities.
+- `sau_backend.py`: compatibility shim only; it no longer starts a Flask API.
 
-```bash
-sau douyin login --account <account_name>
-sau douyin check --account <account_name>
-sau douyin upload --account <account_name> --file <video_file> --title <title> [--tags tag1,tag2] [--schedule YYYY-MM-DD HH:MM]
-```
+## Working Notes
 
-安装内置 skill：
-
-```bash
-sau skill install
-```
-
-## 代码组织
-
-- 后端主要位于仓库根目录、`myUtils/`、`uploader/`
-- 前端位于 `sau_frontend/`
-- 数据库文件：`db/database.db`
-- 配置模板：`conf.example.py`（复制为 `conf.py` 后按需配置）
-- Python 依赖：`requirements.txt`
-- 前端依赖：`sau_frontend/package.json`
-
-## Codex 工作约定
-
-- 修改代码时优先保持最小变更，避免无关重构。
-- 搜索优先使用 `rg` / `rg --files`。
-- 若仓库存在未提交改动，不回滚与当前任务无关的改动。
-- 涉及 CLI 能力时，默认优先使用 `sau douyin ...` 路径验证行为。
-
+- Do not reintroduce HTTP as the desktop UI integration boundary.
+- Prefer adding behavior to `sau_core` services, then call those services from PySide widgets.
+- Keep UI dense and operational: tables, toolbars, split panes, compact forms.
+- Preserve existing SQLite schema and runtime directory layout unless a migration is explicitly planned.

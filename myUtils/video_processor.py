@@ -63,17 +63,22 @@ def clamp_int(value, default, minimum, maximum):
 def normalize_video_processing_config(payload=None):
     payload = payload or {}
     defaults = DEFAULT_VIDEO_PROCESSING_CONFIG
+    legacy_trim_enabled = None
+    if "enableTrimHead" in payload or "enableTrimTail" in payload:
+        legacy_trim_enabled = coerce_bool(payload.get("enableTrimHead"), False) or coerce_bool(
+            payload.get("enableTrimTail"), False
+        )
     config = {
         "autoProcess": coerce_bool(payload.get("autoProcess"), defaults["autoProcess"]),
-        "trimEnabled": coerce_bool(payload.get("trimEnabled"), defaults["trimEnabled"]),
+        "trimEnabled": coerce_bool(payload.get("trimEnabled", legacy_trim_enabled), defaults["trimEnabled"]),
         "trimHeadMin": clamp_number(payload.get("trimHeadMin"), defaults["trimHeadMin"], 0, 10),
         "trimHeadMax": clamp_number(payload.get("trimHeadMax"), defaults["trimHeadMax"], 0, 10),
         "trimTailMin": clamp_number(payload.get("trimTailMin"), defaults["trimTailMin"], 0, 10),
         "trimTailMax": clamp_number(payload.get("trimTailMax"), defaults["trimTailMax"], 0, 10),
-        "speedEnabled": coerce_bool(payload.get("speedEnabled"), defaults["speedEnabled"]),
+        "speedEnabled": coerce_bool(payload.get("speedEnabled", payload.get("enableSpeed")), defaults["speedEnabled"]),
         "speedMin": clamp_number(payload.get("speedMin"), defaults["speedMin"], 0.5, 2),
         "speedMax": clamp_number(payload.get("speedMax"), defaults["speedMax"], 0.5, 2),
-        "cropEnabled": coerce_bool(payload.get("cropEnabled"), defaults["cropEnabled"]),
+        "cropEnabled": coerce_bool(payload.get("cropEnabled", payload.get("enableCrop")), defaults["cropEnabled"]),
         "cropPercentMin": clamp_number(payload.get("cropPercentMin"), defaults["cropPercentMin"], 0, 10),
         "cropPercentMax": clamp_number(payload.get("cropPercentMax"), defaults["cropPercentMax"], 0, 10),
         "pinkFilterEnabled": coerce_bool(payload.get("pinkFilterEnabled"), defaults["pinkFilterEnabled"]),
