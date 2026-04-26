@@ -13,7 +13,7 @@ class DesktopSmokeTests(unittest.TestCase):
 
         app = QApplication.instance() or QApplication([])
         window = MainWindow()
-        self.assertEqual(window.windowTitle(), "Social Auto Upload 1.0")
+        self.assertEqual(window.windowTitle(), "拾光分发 1.0")
         self.assertEqual(window.stack.count(), 7)
         window.close()
         app.processEvents()
@@ -112,9 +112,9 @@ class DesktopSmokeTests(unittest.TestCase):
         self.assertEqual(dialog.status.text(), "downloading")
         self.assertEqual(dialog.title.text(), "中文标题")
         self.assertEqual(dialog.progress.value(), 42)
-        self.assertEqual(dialog.source_preview["button"].isEnabled(), True)
-        self.assertEqual(dialog.local_preview["button"].isEnabled(), True)
-        self.assertEqual(dialog.processed_preview["button"].isEnabled(), True)
+        self.assertEqual(dialog.source_preview["source_url"], "https://www.youtube.com/watch?v=abc123")
+        self.assertEqual(dialog.local_preview["play_button"].isEnabled(), True)
+        self.assertEqual(dialog.processed_preview["play_button"].isEnabled(), True)
         dialog.close()
         app.processEvents()
 
@@ -136,6 +136,7 @@ class DesktopSmokeTests(unittest.TestCase):
                         "progressPercent": 42,
                         "progressText": "正在下载",
                         "videoTitleZh": "中文标题",
+                        "resolution": "1920x1080",
                         "fileSize": 12.345,
                     }
                 ]
@@ -147,9 +148,10 @@ class DesktopSmokeTests(unittest.TestCase):
         page = DownloadPage(FakeDownloadService())
 
         headers = [page.table.horizontalHeaderItem(index).text() for index in range(page.table.columnCount())]
-        self.assertEqual(headers, ["下载时间", "下载进度", "标题", "文件大小"])
+        self.assertEqual(headers, ["下载时间", "下载进度", "标题", "分辨率", "文件大小"])
         self.assertEqual(page.table.item(0, 1).text(), "42%  正在下载")
-        self.assertEqual(page.table.item(0, 3).text(), "12.35 MB")
+        self.assertEqual(page.table.item(0, 3).text(), "1920x1080")
+        self.assertEqual(page.table.item(0, 4).text(), "12.35 MB")
         self.assertEqual(page.table.item(0, 0).data(Qt.UserRole + 1)["taskId"], "task-1")
         page.close()
         app.processEvents()

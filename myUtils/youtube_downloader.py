@@ -160,12 +160,38 @@ def extract_video_metadata(url: str, proxy: str | None = None, cookiefile: str |
         raise DownloadError("playlist is not supported")
     if not isinstance(info, dict):
         raise DownloadError("metadata extract failed")
+    width = info.get("width")
+    height = info.get("height")
+    if not width or not height:
+        formats = [item for item in info.get("formats") or [] if isinstance(item, dict)]
+        video_formats = [
+            item for item in formats
+            if item.get("height") and (item.get("vcodec") or "none") != "none"
+        ]
+        if video_formats:
+            best_format = max(video_formats, key=lambda item: int(item.get("height") or 0))
+            width = best_format.get("width") or width
+            height = best_format.get("height") or height
     return {
         "title": info.get("title") or "",
         "description": info.get("description") or "",
         "id": info.get("id") or "",
         "ext": info.get("ext") or "mp4",
+        "width": width,
+        "height": height,
+        "resolution": format_resolution(width, height),
     }
+
+
+def format_resolution(width, height) -> str:
+    try:
+        width = int(width or 0)
+        height = int(height or 0)
+    except (TypeError, ValueError):
+        return ""
+    if width <= 0 or height <= 0:
+        return ""
+    return f"{width}x{height}"
 
 
 def download_video(

@@ -41,6 +41,7 @@ from myUtils.youtube_downloader import (
 from myUtils.video_processor import (
     load_video_processing_config,
     normalize_video_processing_config,
+    probe_video,
     process_video,
 )
 
@@ -314,6 +315,20 @@ def read_subtitle_text(relative_path: str | None) -> str:
             continue
         except OSError:
             return ""
+    return ""
+
+
+def detect_video_resolution(relative_path: str | None) -> str:
+    if not relative_path:
+        return ""
+    try:
+        metadata = probe_video(safe_relative_file(VIDEO_DIR, relative_path))
+    except Exception:
+        return ""
+    width = metadata.get("width")
+    height = metadata.get("height")
+    if width and height:
+        return f"{int(width)}x{int(height)}"
     return ""
 
 
@@ -705,6 +720,15 @@ class DownloadService:
             title = metadata.get("title") or f"youtube_{task_id[:8]}"
             translated_title = translate_title_to_zh(title)
             safe_title = sanitize_filename(translated_title or title)
+            self._update_task(
+                task_id,
+                video_id=metadata.get("id"),
+                video_title=title,
+                video_title_zh=translated_title,
+                video_description=metadata.get("description"),
+                video_resolution=metadata.get("resolution"),
+            )
+            self._emit(callback, task_id)
 
             def on_progress(status):
                 progress_fields = self._extract_progress_fields(status)
@@ -753,6 +777,7 @@ class DownloadService:
                 filename=final_path.name,
                 file_path=final_path.name,
                 file_size_mb=round(final_path.stat().st_size / (1024 * 1024), 2),
+                video_resolution=detect_video_resolution(final_path.name) or metadata.get("resolution"),
                 video_title=title,
                 video_title_zh=translated_title,
                 video_description=metadata.get("description"),
@@ -821,6 +846,7 @@ class DownloadService:
             "video_title": None,
             "video_title_zh": None,
             "video_description": None,
+            "video_resolution": None,
             "download_subtitles": download_subtitles,
             "subtitle_file_path": None,
             "subtitle_text": None,
@@ -874,6 +900,7 @@ class DownloadService:
             "video_title": row_dict.get("video_title"),
             "video_title_zh": row_dict.get("video_title_zh"),
             "video_description": row_dict.get("video_description"),
+            "video_resolution": detect_video_resolution(row_dict.get("file_path")),
             "subtitle_file_path": row_dict.get("subtitle_path"),
             "filename": row_dict.get("filename"),
             "file_path": row_dict.get("file_path"),
@@ -924,6 +951,7 @@ class DownloadService:
             "videoTitle": task.get("video_title"),
             "videoTitleZh": task.get("video_title_zh"),
             "videoDescription": task.get("video_description"),
+            "resolution": task.get("video_resolution"),
             "downloadSubtitles": task.get("download_subtitles", True),
             "subtitleFilePath": task.get("subtitle_file_path"),
             "subtitleText": subtitle_text if include_subtitle_text else None,

@@ -1,6 +1,6 @@
 {
-  "last_turn_at": "2026-04-26T09:53:56.876Z",
-  "turn_count": 25,
-  "last_progress_at": "2026-04-26T09:53:56.876Z",
-  "last_agent_output": "已修复。原因是账号列表刷新函数里有一处缩进错误，导致循环结束后只追加最后一条账号记录。你当前数据库里最后一条刚好是抖音，所以界面看起来“只能显示抖音”。\n\n我检查到本地 `db/database.db"
+  "last_turn_at": "2026-04-26T10:22:20.506Z",
+  "turn_count": 32,
+  "last_progress_at": "2026-04-26T10:22:20.506Z",
+  "last_agent_output": "已改成内置播放器，不再跳转浏览器或系统播放器。\n\n改动在 [sau_desktop/main.py](d:/private/code/social-auto-upload/sau_desktop/ma"
 }

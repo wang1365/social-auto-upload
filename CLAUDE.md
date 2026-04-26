@@ -1,6 +1,6 @@
 ## Project Overview
 
-`social-auto-upload` 1.0 is a local desktop application for uploading and managing social-media publishing workflows. The product UI is implemented with PySide6 and calls Python services directly.
+`拾光分发` 1.0 is a local desktop application for uploading and managing social-media publishing workflows. The product UI is implemented with PySide6 and calls Python services directly.
 
 The previous Vue frontend and Flask HTTP API are legacy architecture and are not part of the 1.0 primary path.
 

@@ -1,8 +1,8 @@
-# social-auto-upload for Codex
+# 拾光分发 for Codex
 
 ## Project Overview
 
-`social-auto-upload` 1.0 is a local Python desktop client for managing social-media upload workflows. The old Vue + Flask web path has been removed from the primary product surface.
+`拾光分发` 1.0 is a local Python desktop client for managing social-media upload workflows. The old Vue + Flask web path has been removed from the primary product surface.
 
 ## Tech Stack
 

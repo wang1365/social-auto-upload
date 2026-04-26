@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "SAU Desktop",
+      "name": "拾光分发 Desktop",
       "type": "debugpy",
       "request": "launch",
       "module": "sau_desktop.main",
@@ -15,7 +15,7 @@
       "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe"
     },
     {
-      "name": "SAU Desktop Watch",
+      "name": "拾光分发 Desktop Watch",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}\\tools\\watch_desktop.py",
@@ -28,7 +28,7 @@
       "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe"
     },
     {
-      "name": "SAU CLI",
+      "name": "拾光分发 CLI",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}\\sau_cli.py",
@@ -44,9 +44,9 @@
   ],
   "compounds": [
     {
-      "name": "SAU Desktop 1.0",
+      "name": "拾光分发 Desktop 1.0",
       "configurations": [
-        "SAU Desktop"
+        "拾光分发 Desktop"
       ],
       "stopAll": true
     }

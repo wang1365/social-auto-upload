@@ -3,9 +3,13 @@ from __future__ import annotations
 import base64
 import sys
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QPixmap
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtMultimediaWidgets import QVideoWidget
+from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -74,15 +78,19 @@ QWidget#Sidebar {
     background: #ffffff;
     border-right: 1px solid #d9e1ec;
 }
-QLabel#BrandTitle {
-    font-size: 13px;
-    font-weight: 800;
-    color: #111827;
-    padding: 12px 10px 0 10px;
+QWidget#BrandBlock {
+    background: #ffffff;
+    border-bottom: 1px solid #d9e1ec;
 }
-QLabel#BrandMeta {
-    color: #667085;
-    padding: 0 10px 8px 10px;
+QLabel#BrandTitle {
+    font-size: 18px;
+    font-weight: 900;
+    color: #14532d;
+    letter-spacing: 0px;
+    background: #ecfdf5;
+    border: 1px solid #bbf7d0;
+    border-radius: 6px;
+    padding: 4px 8px;
 }
 QListWidget#Navigation {
     background: #ffffff;
@@ -106,12 +114,19 @@ QListWidget#Navigation::item:selected {
     font-weight: 600;
 }
 QLabel#PageTitle {
-    font-size: 18px;
-    font-weight: 700;
-    color: #111827;
+    font-size: 19px;
+    font-weight: 900;
+    color: #134e4a;
 }
 QLabel#PageSubtitle {
-    color: #667085;
+    color: #64748b;
+    font-size: 12px;
+}
+QWidget#PageHeader {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #f0fdfa, stop:1 #ffffff);
+    border: 1px solid #ccfbf1;
+    border-left: 4px solid #0f766e;
+    border-radius: 7px;
 }
 QLabel#PreviewPlaceholder {
     background: #0f172a;
@@ -245,16 +260,19 @@ def make_button(text: str, slot=None, primary=False, danger=False) -> QPushButto
 
 def page_header(title: str, subtitle: str = "") -> QWidget:
     container = QWidget()
-    layout = QVBoxLayout(container)
-    layout.setContentsMargins(0, 0, 0, 4)
-    layout.setSpacing(1)
+    container.setObjectName("PageHeader")
+    layout = QHBoxLayout(container)
+    layout.setContentsMargins(12, 6, 12, 6)
+    layout.setSpacing(10)
     title_label = QLabel(title)
     title_label.setObjectName("PageTitle")
     layout.addWidget(title_label)
     if subtitle:
         subtitle_label = QLabel(subtitle)
         subtitle_label.setObjectName("PageSubtitle")
+        subtitle_label.setAlignment(Qt.AlignVCenter)
         layout.addWidget(subtitle_label)
+    layout.addStretch()
     return container
 
 
@@ -590,7 +608,7 @@ class DownloadPage(QWidget):
         self.download_service = download_service
         self.refresh_requested.connect(self.refresh)
         self.detail_dialog = None
-        self.table = DenseTable(["下载时间", "下载进度", "标题", "文件大小"], [165, 300, 460, 100])
+        self.table = DenseTable(["下载时间", "下载进度", "标题", "分辨率", "文件大小"], [165, 280, 420, 100, 100])
         self.table.doubleClicked.connect(lambda _index: self.open_selected_task_detail())
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.show_context_menu)
@@ -641,6 +659,7 @@ class DownloadPage(QWidget):
                     task.get("createdAt") or task.get("updatedAt"),
                     self._progress_text(task),
                     task.get("videoTitleZh") or task.get("videoTitle") or task.get("sourceUrl"),
+                    task.get("resolution") or "-",
                     self._file_size_text(task),
                 ]
                 for task in tasks
@@ -760,9 +779,9 @@ class DownloadTaskDetailDialog(QDialog):
         self.error.setMaximumHeight(100)
         self.description = QTextEdit()
         self.description.setReadOnly(True)
-        self.source_preview = self._preview_card("源视频", "等待视频链接", "打开源视频", self.open_source_video)
-        self.local_preview = self._preview_card("已下载视频", "等待下载完成", "播放已下载视频", self.open_file)
-        self.processed_preview = self._preview_card("处理后视频", "等待视频处理", "播放处理后视频", self.open_processed_file)
+        self.source_preview = self._source_preview_card()
+        self.local_preview = self._media_preview_card("已下载视频")
+        self.processed_preview = self._media_preview_card("处理后视频")
 
         summary = QFormLayout()
         summary.setLabelAlignment(Qt.AlignRight)
@@ -828,66 +847,135 @@ class DownloadTaskDetailDialog(QDialog):
         self.eta.setText(task.get("etaText") or "-")
         self.description.setPlainText(task.get("videoDescription") or "")
         self.error.setPlainText(task.get("errorDetail") or task.get("errorMessage") or "")
-        self._update_preview(
-            self.source_preview,
-            "可打开 YouTube 源视频" if task.get("sourceUrl") else "等待视频链接",
-            bool(task.get("sourceUrl")),
-        )
-        self._update_preview(
+        self._update_source_preview(task.get("sourceUrl"))
+        self._update_media_preview(
             self.local_preview,
             task.get("filename") or "等待下载完成",
-            bool(task.get("filePath")),
+            task.get("filePath"),
         )
         processing_text = task.get("processingProgressText") or "等待视频处理"
         if task.get("processedFilePath"):
             processing_text = task.get("processedFilename") or task.get("processedFilePath")
-        self._update_preview(
+        self._update_media_preview(
             self.processed_preview,
             processing_text,
-            bool(task.get("processedFilePath")),
+            task.get("processedFilePath"),
         )
 
-    def _preview_card(self, title: str, text: str, button_text: str, handler):
-        group = QGroupBox(title)
-        body = QLabel(text)
-        body.setAlignment(Qt.AlignCenter)
-        body.setMinimumHeight(96)
-        body.setWordWrap(True)
-        body.setObjectName("PreviewPlaceholder")
-        button = make_button(button_text, handler)
+    def _source_preview_card(self):
+        group = QGroupBox("源视频")
+        if QApplication.instance() and QApplication.platformName().lower() == "offscreen":
+            body = QLabel("测试环境不加载 WebEngine")
+            body.setAlignment(Qt.AlignCenter)
+            body.setObjectName("PreviewPlaceholder")
+            web = None
+        else:
+            web = QWebEngineView()
+            web.setMinimumHeight(150)
+            body = web
         layout = QVBoxLayout(group)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
         layout.addWidget(body, 1)
-        layout.addWidget(button)
-        return {"group": group, "body": body, "button": button}
+        return {"group": group, "body": body, "web": web, "source_url": None}
 
-    def _update_preview(self, preview, text: str, enabled: bool):
-        preview["body"].setText(text)
-        preview["button"].setEnabled(enabled)
+    def _media_preview_card(self, title: str):
+        group = QGroupBox(title)
+        video = QVideoWidget()
+        video.setMinimumHeight(150)
+        player = QMediaPlayer(self)
+        audio = QAudioOutput(self)
+        player.setAudioOutput(audio)
+        player.setVideoOutput(video)
+        placeholder = QLabel("等待视频文件")
+        placeholder.setAlignment(Qt.AlignCenter)
+        placeholder.setObjectName("PreviewPlaceholder")
+        play_button = make_button("播放/暂停")
+        stop_button = make_button("停止")
+        play_button.setEnabled(False)
+        stop_button.setEnabled(False)
+        play_button.clicked.connect(lambda: self._toggle_media_player(player))
+        stop_button.clicked.connect(player.stop)
+
+        controls = QHBoxLayout()
+        controls.addWidget(play_button)
+        controls.addWidget(stop_button)
+        controls.addStretch()
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+        layout.addWidget(video, 1)
+        layout.addWidget(placeholder, 1)
+        layout.addLayout(controls)
+        video.hide()
+        return {
+            "group": group,
+            "video": video,
+            "placeholder": placeholder,
+            "player": player,
+            "play_button": play_button,
+            "stop_button": stop_button,
+            "file_path": None,
+        }
 
     def _current_task(self) -> dict:
         return self.download_service.get_youtube_task(self.task_id)
 
-    def open_source_video(self):
-        task = self._current_task()
-        source_url = task.get("sourceUrl")
-        if source_url:
-            QDesktopServices.openUrl(QUrl(source_url))
-
-    def open_file(self):
-        task = self._current_task()
-        self._open_video_path(task.get("filePath"), "当前任务还没有生成本地文件")
-
-    def open_processed_file(self):
-        task = self._current_task()
-        self._open_video_path(task.get("processedFilePath"), "当前任务还没有生成处理后视频")
-
-    def _open_video_path(self, file_path: str | None, empty_message: str):
-        if not file_path:
-            QMessageBox.information(self, "打开文件", empty_message)
+    def _update_source_preview(self, source_url: str | None):
+        if not source_url:
+            if isinstance(self.source_preview["body"], QLabel):
+                self.source_preview["body"].setText("等待视频链接")
             return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(VIDEO_DIR / file_path)))
+        if self.source_preview["source_url"] == source_url:
+            return
+        self.source_preview["source_url"] = source_url
+        embed_url = self._youtube_embed_url(source_url)
+        web = self.source_preview.get("web")
+        if web:
+            web.load(QUrl(embed_url or source_url))
+        elif isinstance(self.source_preview["body"], QLabel):
+            self.source_preview["body"].setText("源视频将在正式窗口中内嵌播放")
+
+    def _update_media_preview(self, preview, text: str, relative_path: str | None):
+        if not relative_path:
+            preview["player"].stop()
+            preview["file_path"] = None
+            preview["video"].hide()
+            preview["placeholder"].show()
+            preview["placeholder"].setText(text)
+            preview["play_button"].setEnabled(False)
+            preview["stop_button"].setEnabled(False)
+            return
+        if preview["file_path"] != relative_path:
+            preview["player"].stop()
+            preview["file_path"] = relative_path
+            preview["player"].setSource(QUrl.fromLocalFile(str(VIDEO_DIR / relative_path)))
+        preview["placeholder"].hide()
+        preview["video"].show()
+        preview["play_button"].setEnabled(True)
+        preview["stop_button"].setEnabled(True)
+
+    def _toggle_media_player(self, player: QMediaPlayer):
+        if player.playbackState() == QMediaPlayer.PlayingState:
+            player.pause()
+        else:
+            player.play()
+
+    def _youtube_embed_url(self, source_url: str) -> str:
+        parsed = urlparse(source_url)
+        video_id = ""
+        if "youtu.be" in parsed.netloc:
+            video_id = parsed.path.strip("/").split("/", 1)[0]
+        else:
+            video_id = parse_qs(parsed.query).get("v", [""])[0]
+        if not video_id:
+            return ""
+        return f"https://www.youtube.com/embed/{video_id}"
+
+    def closeEvent(self, event):
+        for preview in (self.local_preview, self.processed_preview):
+            preview["player"].stop()
+        super().closeEvent(event)
 
 
 class PublishPage(QWidget):
@@ -1165,7 +1253,7 @@ class SettingsPage(QWidget):
 class AboutPage(QWidget):
     def __init__(self):
         super().__init__()
-        text = QLabel("Social Auto Upload 1.0\n本地 PySide6 客户端\nFlask/Vue Web 主路径已废弃。")
+        text = QLabel("拾光分发 1.0\n本地 PySide6 客户端\nFlask/Vue Web 主路径已废弃。")
         text.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
@@ -1178,7 +1266,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         ensure_runtime_schema()
-        self.setWindowTitle("Social Auto Upload 1.0")
+        self.setWindowTitle("拾光分发 1.0")
         self.resize(1320, 820)
 
         self.account_service = AccountService()
@@ -1194,10 +1282,15 @@ class MainWindow(QMainWindow):
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
         sidebar_layout.setSpacing(0)
-        brand = QLabel("Social Auto Upload")
+        brand_block = QWidget()
+        brand_block.setObjectName("BrandBlock")
+        brand_layout = QVBoxLayout(brand_block)
+        brand_layout.setContentsMargins(12, 14, 12, 14)
+        brand_layout.setSpacing(0)
+        brand = QLabel("拾光分发")
         brand.setObjectName("BrandTitle")
-        version = QLabel("Desktop 1.0")
-        version.setObjectName("BrandMeta")
+        brand.setAlignment(Qt.AlignCenter)
+        brand_layout.addWidget(brand)
 
         self.nav = QListWidget()
         self.nav.setObjectName("Navigation")
@@ -1216,8 +1309,7 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(page)
         self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
         self.nav.setCurrentRow(0)
-        sidebar_layout.addWidget(brand)
-        sidebar_layout.addWidget(version)
+        sidebar_layout.addWidget(brand_block)
         sidebar_layout.addWidget(self.nav, 1)
 
         splitter = QSplitter(Qt.Horizontal)
