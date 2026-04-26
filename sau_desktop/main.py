@@ -27,17 +27,18 @@ from sau_core.services import (
     ensure_runtime_schema,
 )
 from sau_desktop._shared import APP_STYLE
-from sau_desktop.about_page import AboutPage
-from sau_desktop.account_page import AccountLoginDialog, AccountPage
-from sau_desktop.dashboard_page import DashboardPage
-from sau_desktop.download_page import (
+from sau_desktop.pages import (
+    AboutPage,
+    AccountLoginDialog,
+    AccountPage,
     CreateDownloadDialog,
+    DashboardPage,
     DownloadPage,
     DownloadTaskDetailDialog,
+    MaterialPage,
+    PublishPage,
+    SettingsPage,
 )
-from sau_desktop.material_page import MaterialPage
-from sau_desktop.publish_page import PublishPage
-from sau_desktop.settings_page import SettingsPage
 
 # Re-export for backward compatibility (tests import from sau_desktop.main)
 __all__ = [

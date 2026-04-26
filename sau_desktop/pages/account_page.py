@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import base64
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -16,12 +19,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QComboBox,
     QVBoxLayout,
     QWidget,
 )
-
-from pathlib import Path
 
 from sau_core.services import AccountService
 from sau_desktop._shared import DenseTable, make_button, page_header, run_background
@@ -104,8 +104,6 @@ class AccountPage(QWidget):
         if not account:
             return
         path = self.account_service.export_cookie_path(account["filePath"])
-        from PySide6.QtGui import QDesktopServices
-        from PySide6.QtCore import QUrl
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def delete_account(self):
