@@ -330,17 +330,55 @@ class Worker(QObject):
             self.failed.emit(str(exc))
 
 
+class BackgroundCallbacks(QObject):
+    def __init__(self, parent, thread, worker, on_done=None, on_error=None):
+        super().__init__(parent)
+        self._parent = parent
+        self._thread = thread
+        self._worker = worker
+        self._on_done = on_done
+        self._on_error = on_error
+
+    @Slot(object)
+    def done(self, result):
+        try:
+            if self._on_done:
+                self._on_done(result)
+        finally:
+            self._cleanup()
+
+    @Slot(str)
+    def failed(self, message):
+        try:
+            if self._on_error:
+                self._on_error(message)
+            else:
+                QMessageBox.critical(self._parent, "错误", message)
+        finally:
+            self._cleanup()
+
+    def _cleanup(self):
+        jobs = getattr(self._parent, "_background_jobs", None)
+        if jobs is not None:
+            jobs.discard(self)
+        self._thread.quit()
+        self._worker.deleteLater()
+        self.deleteLater()
+
+
 def run_background(parent, fn, on_done=None, on_error=None):
     thread = QThread(parent)
     worker = Worker(fn)
+    callbacks = BackgroundCallbacks(parent, thread, worker, on_done, on_error)
+    jobs = getattr(parent, "_background_jobs", None)
+    if jobs is None:
+        jobs = set()
+        setattr(parent, "_background_jobs", jobs)
+    jobs.add(callbacks)
     worker.moveToThread(thread)
     thread.started.connect(worker.run)
-    worker.finished.connect(lambda result: on_done(result) if on_done else None)
-    worker.failed.connect(lambda message: on_error(message) if on_error else QMessageBox.critical(parent, "错误", message))
-    worker.finished.connect(thread.quit)
-    worker.failed.connect(thread.quit)
-    worker.finished.connect(worker.deleteLater)
-    worker.failed.connect(worker.deleteLater)
+    worker.finished.connect(callbacks.done)
+    worker.failed.connect(callbacks.failed)
     thread.finished.connect(thread.deleteLater)
     thread.start()
     return thread

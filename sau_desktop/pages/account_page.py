@@ -167,7 +167,7 @@ class AccountLoginDialog(QDialog):
         self.setWindowTitle("添加账号")
         self.setMinimumWidth(460)
         self.platform = QComboBox()
-        for label, value in PLATFORM_CHOICES:
+        for value, label in PLATFORM_CHOICES:
             self.platform.addItem(label, value)
         self.username = QLineEdit()
         self.username.setPlaceholderText("请输入账号名称")

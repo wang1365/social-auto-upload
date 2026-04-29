@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qs, urlparse
 
-from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtCore import Qt, QUrl, QTimer, Signal
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
@@ -13,13 +13,13 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMenu,
     QMessageBox,
     QProgressBar,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -268,8 +268,9 @@ class DownloadTaskDetailDialog(QDialog):
         self.download_service = download_service
         self.task_id = task_id
         self.setWindowTitle("下载详情")
-        self.setMinimumSize(760, 520)
+        self.setMinimumSize(1000, 580)
 
+        # --- Left: info ---
         self.status = QLabel()
         self.phase = QLabel()
         self.title = QLabel()
@@ -284,12 +285,9 @@ class DownloadTaskDetailDialog(QDialog):
         self.eta = QLabel()
         self.error = QTextEdit()
         self.error.setReadOnly(True)
-        self.error.setMaximumHeight(100)
+        self.error.setMaximumHeight(80)
         self.description = QTextEdit()
         self.description.setReadOnly(True)
-        self.source_preview = self._source_preview_card()
-        self.local_preview = self._media_preview_card("已下载视频")
-        self.processed_preview = self._media_preview_card("处理后视频")
 
         summary = QFormLayout()
         summary.setLabelAlignment(Qt.AlignRight)
@@ -301,35 +299,57 @@ class DownloadTaskDetailDialog(QDialog):
         summary.addRow("本地文件", self.filename)
         summary.addRow("更新时间", self.updated_at)
 
-        progress_layout = QFormLayout()
-        progress_layout.setLabelAlignment(Qt.AlignRight)
-        progress_layout.addRow("进度", self.progress)
-        progress_layout.addRow("说明", self.progress_text)
-        progress_layout.addRow("速度", self.speed)
-        progress_layout.addRow("剩余时间", self.eta)
+        progress_form = QFormLayout()
+        progress_form.setLabelAlignment(Qt.AlignRight)
+        progress_form.addRow("进度", self.progress)
+        progress_form.addRow("说明", self.progress_text)
+        progress_form.addRow("速度", self.speed)
+        progress_form.addRow("剩余时间", self.eta)
 
-        preview_layout = QHBoxLayout()
-        preview_layout.setSpacing(10)
-        preview_layout.addWidget(self.source_preview["group"], 1)
-        preview_layout.addWidget(self.local_preview["group"], 1)
-        preview_layout.addWidget(self.processed_preview["group"], 1)
+        left_layout = QVBoxLayout()
+        left_layout.setSpacing(8)
+        left_layout.addLayout(summary)
+        left_layout.addLayout(progress_form)
+        left_layout.addWidget(QLabel("视频描述"))
+        left_layout.addWidget(self.description, 1)
+        left_layout.addWidget(QLabel("失败信息"))
+        left_layout.addWidget(self.error)
 
+        # --- Right: video previews in tabs ---
+        self.source_preview = self._source_preview_card()
+        self.local_preview = self._media_preview_card()
+        self.processed_preview = self._media_preview_card()
+
+        preview_tabs = QTabWidget()
+        preview_tabs.addTab(self.source_preview["widget"], "源视频")
+        preview_tabs.addTab(self.local_preview["widget"], "已下载视频")
+        preview_tabs.addTab(self.processed_preview["widget"], "处理后视频")
+
+        # --- Buttons ---
         buttons = QHBoxLayout()
         buttons.addWidget(make_button("刷新", self.refresh))
         buttons.addStretch()
         buttons.addWidget(make_button("关闭", self.close))
 
+        # --- Main layout: left 1 : right 1 ---
+        main_split = QHBoxLayout()
+        main_split.setSpacing(12)
+        left_widget = QWidget()
+        left_widget.setLayout(left_layout)
+        main_split.addWidget(left_widget, 1)
+        main_split.addWidget(preview_tabs, 1)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(10)
-        layout.addLayout(summary)
-        layout.addLayout(progress_layout)
-        layout.addLayout(preview_layout)
-        layout.addWidget(QLabel("视频描述"))
-        layout.addWidget(self.description, 1)
-        layout.addWidget(QLabel("失败信息"))
-        layout.addWidget(self.error)
+        layout.addLayout(main_split, 1)
         layout.addLayout(buttons)
+
+        # Auto-refresh timer for active tasks (downloading / processing)
+        self._auto_refresh_timer = QTimer(self)
+        self._auto_refresh_timer.setInterval(1500)
+        self._auto_refresh_timer.timeout.connect(self.refresh)
+        self._auto_refresh_timer.start()
         self.refresh()
 
     def refresh(self):
@@ -337,6 +357,7 @@ class DownloadTaskDetailDialog(QDialog):
             task = self.download_service.get_youtube_task(self.task_id)
         except ServiceError as exc:
             self.status.setText(str(exc))
+            self._auto_refresh_timer.stop()
             return
         title = task.get("videoTitleZh") or task.get("videoTitle") or "-"
         progress_percent = task.get("progressPercent")
@@ -370,22 +391,27 @@ class DownloadTaskDetailDialog(QDialog):
             task.get("processedFilePath"),
         )
 
+        # Stop auto-refresh once the task reaches a terminal state
+        task_status = task.get("status")
+        if task_status in ("success", "failed"):
+            self._auto_refresh_timer.stop()
+
     def _source_preview_card(self):
-        group = QGroupBox("源视频")
+        widget = QWidget()
         placeholder = QLabel("点击加载源视频预览")
         placeholder.setAlignment(Qt.AlignCenter)
         placeholder.setObjectName("PreviewPlaceholder")
         load_button = make_button("加载预览")
         load_button.setEnabled(False)
 
-        layout = QVBoxLayout(group)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
         layout.addWidget(placeholder, 1)
         layout.addWidget(load_button)
 
         return {
-            "group": group,
+            "widget": widget,
             "placeholder": placeholder,
             "load_button": load_button,
             "web": None,
@@ -402,17 +428,15 @@ class DownloadTaskDetailDialog(QDialog):
             return
         from PySide6.QtWebEngineWidgets import QWebEngineView
         web = QWebEngineView()
-        web.setMinimumHeight(150)
-        layout = preview["group"].layout()
+        layout = preview["widget"].layout()
         layout.removeWidget(preview["placeholder"])
         preview["placeholder"].deleteLater()
         layout.insertWidget(0, web, 1)
         preview["web"] = web
 
-    def _media_preview_card(self, title: str):
-        group = QGroupBox(title)
+    def _media_preview_card(self):
+        widget = QWidget()
         video = QVideoWidget()
-        video.setMinimumHeight(150)
         player = QMediaPlayer(self)
         audio = QAudioOutput(self)
         player.setAudioOutput(audio)
@@ -431,15 +455,15 @@ class DownloadTaskDetailDialog(QDialog):
         controls.addWidget(play_button)
         controls.addWidget(stop_button)
         controls.addStretch()
-        layout = QVBoxLayout(group)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
         layout.addWidget(video, 1)
         layout.addWidget(placeholder, 1)
         layout.addLayout(controls)
         video.hide()
         return {
-            "group": group,
+            "widget": widget,
             "video": video,
             "placeholder": placeholder,
             "player": player,
@@ -508,6 +532,7 @@ class DownloadTaskDetailDialog(QDialog):
         return f"https://www.youtube.com/embed/{video_id}"
 
     def closeEvent(self, event):
+        self._auto_refresh_timer.stop()
         for preview in (self.local_preview, self.processed_preview):
             preview["player"].stop()
         # Clean up WebEngine if it was created

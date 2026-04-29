@@ -111,6 +111,10 @@ def build_ytdlp_options(proxy: str | None = None, cookiefile: str | None = None,
         options["proxy"] = proxy
     if cookiefile:
         options["cookiefile"] = cookiefile
+    # Enable remote EJS challenge solver script download from GitHub.
+    # Required for YouTube n-parameter and signature challenge solving.
+    # See https://github.com/yt-dlp/yt-dlp/wiki/EJS
+    options.setdefault("remote_components", ["ejs:github"])
     return options
 
 

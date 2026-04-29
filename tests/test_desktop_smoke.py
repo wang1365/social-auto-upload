@@ -44,7 +44,9 @@ class DesktopSmokeTests(unittest.TestCase):
 
         app = QApplication.instance() or QApplication([])
         fake_settings = FakeSettingsService()
-        page = SettingsPage(fake_settings, object())
+        from sau_desktop._shared import EventBus
+
+        page = SettingsPage(fake_settings, object(), EventBus())
 
         payload = page._video_processing_payload()
         self.assertEqual(set(payload), set(DEFAULT_VIDEO_PROCESSING_CONFIG))
@@ -74,6 +76,39 @@ class DesktopSmokeTests(unittest.TestCase):
         self.assertTrue(dialog.subtitles.isChecked())
         self.assertEqual(dialog.values(), ("https://www.youtube.com/watch?v=abc123", True))
         dialog.close()
+        app.processEvents()
+
+    def test_run_background_delivers_callbacks_on_gui_thread(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            from PySide6.QtCore import QEventLoop, QThread, QTimer
+            from PySide6.QtWidgets import QApplication, QWidget
+            from sau_desktop._shared import run_background
+        except ImportError as exc:
+            self.skipTest(f"PySide6 is not installed: {exc}")
+
+        app = QApplication.instance() or QApplication([])
+        parent = QWidget()
+        loop = QEventLoop()
+        observed = {}
+
+        def work():
+            return QThread.currentThread()
+
+        def on_done(worker_thread):
+            observed["worker_thread"] = worker_thread
+            observed["callback_thread"] = QThread.currentThread()
+            observed["gui_thread"] = app.thread()
+            loop.quit()
+
+        run_background(parent, work, on_done=on_done)
+        QTimer.singleShot(3000, loop.quit)
+        loop.exec()
+
+        self.assertIn("callback_thread", observed)
+        self.assertIs(observed["callback_thread"], observed["gui_thread"])
+        self.assertIsNot(observed["worker_thread"], observed["gui_thread"])
+        parent.close()
         app.processEvents()
 
     def test_download_detail_dialog_displays_task_progress(self):
@@ -145,14 +180,96 @@ class DesktopSmokeTests(unittest.TestCase):
                 return self.list_youtube_tasks()[0]
 
         app = QApplication.instance() or QApplication([])
-        page = DownloadPage(FakeDownloadService())
+        from sau_desktop._shared import EventBus
+
+        page = DownloadPage(FakeDownloadService(), EventBus())
 
         headers = [page.table.horizontalHeaderItem(index).text() for index in range(page.table.columnCount())]
-        self.assertEqual(headers, ["下载时间", "下载进度", "标题", "分辨率", "文件大小"])
+        self.assertEqual(headers, ["", "下载时间", "下载进度", "标题", "分辨率", "文件大小"])
         self.assertEqual(page.table.item(0, 1).text(), "42%  正在下载")
         self.assertEqual(page.table.item(0, 3).text(), "1920x1080")
         self.assertEqual(page.table.item(0, 4).text(), "12.35 MB")
         self.assertEqual(page.table.item(0, 0).data(Qt.UserRole + 1)["taskId"], "task-1")
+        page.close()
+        app.processEvents()
+
+    def test_publish_page_uses_checked_rows_for_selected_payload(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            from PySide6.QtCore import Qt
+            from PySide6.QtWidgets import QApplication
+            from sau_desktop._shared import EventBus
+            from sau_desktop.pages.publish_page import PublishPage
+            import sau_desktop.pages.publish_page as publish_page_module
+        except ImportError as exc:
+            self.skipTest(f"PySide6 is not installed: {exc}")
+
+        class FakeMaterialService:
+            def list_materials(self):
+                return [{"filename": "demo.mp4", "source_type": "youtube", "file_path": "stored-demo.mp4"}]
+
+        class FakeAccountService:
+            def list_accounts(self):
+                return [{"type": 4, "platform": "快手", "userName": "KS", "status": 1, "filePath": "ks.json"}]
+
+        class FakePublishService:
+            def __init__(self):
+                self.payload = None
+
+            def publish(self, payload):
+                self.payload = payload
+
+        app = QApplication.instance() or QApplication([])
+        publish_service = FakePublishService()
+        original_run_background = publish_page_module.run_background
+        publish_page_module.run_background = lambda parent, fn, on_done=None, on_error=None: (
+            fn(),
+            on_done(None) if on_done else None,
+        )
+        try:
+            page = PublishPage(FakeMaterialService(), FakeAccountService(), publish_service, EventBus())
+            page.refresh()
+            page.materials.item(0, 0).setCheckState(Qt.Checked)
+            page.accounts.item(0, 0).setCheckState(Qt.Checked)
+            page.title.setText("Title")
+            page.tags.setText("#tag1, tag2")
+
+            page.publish()
+
+            self.assertEqual(publish_service.payload["fileList"], ["stored-demo.mp4"])
+            self.assertEqual(publish_service.payload["accountList"], ["ks.json"])
+            self.assertEqual(publish_service.payload["type"], 4)
+            self.assertEqual(publish_service.payload["tags"], ["tag1", "tag2"])
+            page.close()
+            app.processEvents()
+        finally:
+            publish_page_module.run_background = original_run_background
+
+    def test_publish_page_appends_builtin_topic_presets(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            from PySide6.QtWidgets import QApplication
+            from sau_desktop._shared import EventBus
+            from sau_desktop.pages.publish_page import PublishPage
+        except ImportError as exc:
+            self.skipTest(f"PySide6 is not installed: {exc}")
+
+        class FakeMaterialService:
+            def list_materials(self):
+                return []
+
+        class FakeAccountService:
+            def list_accounts(self):
+                return []
+
+        app = QApplication.instance() or QApplication([])
+        page = PublishPage(FakeMaterialService(), FakeAccountService(), object(), EventBus())
+        page.tags.setText("#已有, AI")
+        page.topic_preset.setCurrentText("AI / 自动化")
+
+        page.add_topic_preset()
+
+        self.assertEqual(page._parse_tags(), ["已有", "AI", "自动化", "效率工具", "副业", "内容创作"])
         page.close()
         app.processEvents()
 
@@ -201,7 +318,10 @@ class DesktopSmokeTests(unittest.TestCase):
                 ]
 
         app = QApplication.instance() or QApplication([])
-        page = AccountPage(FakeAccountService())
+        from sau_desktop._shared import EventBus
+
+        page = AccountPage(FakeAccountService(), EventBus())
+        page.refresh()
 
         self.assertEqual(page.table.rowCount(), 3)
         platforms = [page.table.item(row, 1).text() for row in range(page.table.rowCount())]

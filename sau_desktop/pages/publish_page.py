@@ -15,11 +15,21 @@ from PySide6.QtWidgets import (
     QLabel,
 )
 
-from sau_core.services import AccountService, MaterialService, PLATFORM_CHOICES, PublishService
+from sau_core.services import AccountService, MaterialService, PublishService
 from sau_desktop._shared import (
     DenseTable, EventBus, make_button, page_header, run_background,
     CollapsibleSection,
 )
+
+
+TOPIC_PRESETS = {
+    "AI / 自动化": ["AI", "自动化", "效率工具", "副业", "内容创作"],
+    "技术 / 编程": ["编程", "开源", "Python", "开发工具", "技术分享"],
+    "游戏 / 魔兽": ["魔兽世界", "游戏日常", "怀旧服", "网游", "游戏剪辑"],
+    "生活 / Vlog": ["生活记录", "日常", "Vlog", "治愈", "分享"],
+    "知识 / 干货": ["干货", "经验分享", "学习", "认知", "成长"],
+    "影视 / 剪辑": ["影视剪辑", "电影", "剧情", "高燃", "解说"],
+}
 
 
 class PublishPage(QWidget):
@@ -35,13 +45,19 @@ class PublishPage(QWidget):
         # P0: 隐藏 ID 列，增加状态列便于识别可用账号
         self.accounts = DenseTable(["平台", "用户名", "状态"], [100, 160, 80])
 
-        self.platform = QComboBox()
-        for value, text in PLATFORM_CHOICES:
-            self.platform.addItem(text, value)
         self.title = QLineEdit()
         self.title.setPlaceholderText("发布标题")
         self.tags = QLineEdit()
         self.tags.setPlaceholderText("话题，逗号分隔")
+        self.topic_preset = QComboBox()
+        self.topic_preset.addItem("选择内置话题", [])
+        for name, topics in TOPIC_PRESETS.items():
+            self.topic_preset.addItem(name, topics)
+        topic_widget = QWidget()
+        topic_row = QHBoxLayout(topic_widget)
+        topic_row.setContentsMargins(0, 0, 0, 0)
+        topic_row.addWidget(self.topic_preset, 1)
+        topic_row.addWidget(make_button("添加话题", self.add_topic_preset))
 
         # P2: 日志区域默认折叠
         self.log = QTextEdit()
@@ -57,8 +73,8 @@ class PublishPage(QWidget):
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignRight)
-        form.addRow("平台", self.platform)
         form.addRow("标题", self.title)
+        form.addRow("话题预设", topic_widget)
         form.addRow("话题", self.tags)
 
         actions = QHBoxLayout()
@@ -69,7 +85,7 @@ class PublishPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 10, 14, 10)
         layout.setSpacing(10)
-        layout.addWidget(page_header("发布中心", "选择素材、账号和平台后提交发布任务"))
+        layout.addWidget(page_header("发布中心", "选择素材和账号后提交发布任务"))
         layout.addWidget(step1_label)
         layout.addWidget(self.materials, 1)
         layout.addWidget(step2_label)
@@ -94,24 +110,57 @@ class PublishPage(QWidget):
         )
 
     def publish(self):
-        material_row = self.materials.currentRow()
-        account_row = self.accounts.currentRow()
-        if material_row < 0 or account_row < 0:
-            QMessageBox.warning(self, "发布", "请先选择素材和账号")
+        payloads = self._selected_publish_payloads()
+        if not payloads:
             return
-        # P0: 使用 payload 而非表格文本获取数据（避免截断问题）
-        mat_payload = self.materials.get_payload(material_row)
-        acc_payload = self.accounts.get_payload(account_row)
-        payload = {
-            "type": self.platform.currentData(),
-            "fileList": [mat_payload.get("file_path") if mat_payload else self.materials.item(material_row, 0).text()],
-            "accountList": [acc_payload.get("filePath") if acc_payload else self.accounts.item(account_row, 1).text()],
-            "title": self.title.text().strip(),
-            "tags": [tag.strip().lstrip("#") for tag in self.tags.text().split(",") if tag.strip()],
-        }
         run_background(
             self,
-            lambda: self.publish_service.publish(payload),
-            lambda _: self.log.append("发布任务已提交"),
+            lambda: [self.publish_service.publish(payload) for payload in payloads],
+            lambda _: self.log.append(f"发布任务已提交：{len(payloads)} 个平台"),
             lambda error: self.log.append(f"发布失败: {error}"),
         )
+
+    def add_topic_preset(self):
+        preset_topics = self.topic_preset.currentData() or []
+        if not preset_topics:
+            return
+        tags = self._parse_tags()
+        for topic in preset_topics:
+            if topic not in tags:
+                tags.append(topic)
+        self.tags.setText(", ".join(tags))
+
+    def _selected_publish_payloads(self) -> list[dict]:
+        material_rows = self.materials.checked_rows()
+        account_rows = self.accounts.checked_rows()
+        if not material_rows or not account_rows:
+            QMessageBox.warning(self, "发布", "请先选择素材和账号")
+            return []
+        # P0: 使用 payload 而非表格文本获取数据（避免截断问题）
+        materials = [self.materials.get_payload(row) for row in material_rows]
+        accounts = [self.accounts.get_payload(row) for row in account_rows]
+        file_list = [item.get("file_path") for item in materials if item and item.get("file_path")]
+        if not file_list:
+            QMessageBox.warning(self, "发布", "选中的素材缺少文件路径")
+            return []
+        accounts_by_platform: dict[int, list[str]] = {}
+        for account in accounts:
+            if not account or not account.get("filePath") or not account.get("type"):
+                continue
+            accounts_by_platform.setdefault(int(account["type"]), []).append(account["filePath"])
+        if not accounts_by_platform:
+            QMessageBox.warning(self, "发布", "选中的账号缺少平台信息")
+            return []
+        return [
+            {
+                "type": platform_type,
+                "fileList": file_list,
+                "accountList": account_list,
+                "title": self.title.text().strip(),
+                "tags": self._parse_tags(),
+            }
+            for platform_type, account_list in accounts_by_platform.items()
+        ]
+
+    def _parse_tags(self) -> list[str]:
+        return [tag.strip().lstrip("#") for tag in self.tags.text().split(",") if tag.strip()]

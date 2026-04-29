@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 import sqlite3
 import threading
@@ -52,6 +53,8 @@ COOKIE_DIR = Path(BASE_DIR) / "cookiesFile"
 SYSTEM_COOKIE_DIR = COOKIE_DIR / "system"
 
 ProgressCallback = Callable[[dict], None]
+
+_logger = logging.getLogger("sau.services")
 
 PLATFORM_CHOICES = [(1, "小红书"), (2, "视频号"), (3, "抖音"), (4, "快手")]
 
@@ -754,6 +757,7 @@ class DownloadService:
                 cookiefile=str(cookie_path) if cookie_path else None,
                 proxy=proxy,
             )
+            _logger.info("YouTube 下载完成: %s -> %s", task_id, final_path)
             subtitle_relative = subtitle_path.name if subtitle_path else None
             if subtitle_path:
                 translate_subtitle_file_to_zh(subtitle_path)
@@ -821,6 +825,7 @@ class DownloadService:
                 )
         except Exception as exc:
             error_code, error_message, error_detail = classify_ytdlp_error(exc)
+            _logger.error("YouTube 下载任务 %s 失败: [%s] %s — %s", task_id, error_code, error_message, exc, exc_info=True)
             self._update_task(
                 task_id,
                 status="failed",
