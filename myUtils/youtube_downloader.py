@@ -119,6 +119,9 @@ def build_ytdlp_options(proxy: str | None = None, cookiefile: str | None = None,
 
 
 PRIMARY_FORMAT = (
+    "bestvideo*[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/"
+    "bestvideo*[ext=mp4][vcodec^=avc1]+bestaudio/"
+    "best*[ext=mp4][vcodec^=avc1][acodec!=none]/"
     "bestvideo*[ext=mp4]+bestaudio[ext=m4a]/"
     "bestvideo*[ext=mp4]+bestaudio/"
     "bestvideo*+bestaudio[ext=m4a]/"

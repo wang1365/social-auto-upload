@@ -5,8 +5,6 @@ from __future__ import annotations
 from urllib.parse import parse_qs, urlparse
 
 from PySide6.QtCore import Qt, QUrl, QTimer, Signal
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -27,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from sau_core.services import DownloadService, ServiceError, VIDEO_DIR
 from sau_desktop._shared import DenseTable, EventBus, make_button, page_header, run_background
+from sau_desktop.mpv_preview import MpvPreview
 
 
 class DownloadPage(QWidget):
@@ -36,7 +35,13 @@ class DownloadPage(QWidget):
         super().__init__()
         self.download_service = download_service
         self.event_bus = event_bus
-        self.refresh_requested.connect(self.refresh)
+        self._refresh_running = False
+        self._refresh_again = False
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(500)
+        self._refresh_timer.timeout.connect(self.refresh)
+        self.refresh_requested.connect(self.schedule_refresh)
         self.detail_dialog = None
         # 下载中心表格本身没有 ID 列，已合理
         self.table = DenseTable(["下载时间", "下载进度", "标题", "分辨率", "文件大小"], [165, 280, 420, 100, 100])
@@ -66,7 +71,7 @@ class DownloadPage(QWidget):
         # P2: 连接选择变化信号
         self.table.selection_changed.connect(self._update_selection_info)
 
-        self.event_bus.materials_changed.connect(self.refresh)
+        self.event_bus.materials_changed.connect(self.schedule_refresh)
 
     def _update_selection_info(self, count: int):
         if count > 0:
@@ -99,10 +104,32 @@ class DownloadPage(QWidget):
         self.detail_dialog.activateWindow()
 
     def refresh(self):
-        run_background(self, self._fetch_tasks, on_done=self._apply_tasks)
+        if self._refresh_running:
+            self._refresh_again = True
+            return
+        self._refresh_running = True
+        run_background(self, self._fetch_tasks, on_done=self._on_tasks_loaded, on_error=self._on_tasks_load_failed)
+
+    def schedule_refresh(self):
+        if not self._refresh_timer.isActive():
+            self._refresh_timer.start()
 
     def _fetch_tasks(self):
         return self.download_service.list_youtube_tasks()
+
+    def _on_tasks_loaded(self, tasks):
+        self._refresh_running = False
+        self._apply_tasks(tasks)
+        if self._refresh_again:
+            self._refresh_again = False
+            self.schedule_refresh()
+
+    def _on_tasks_load_failed(self, message: str):
+        self._refresh_running = False
+        if self._refresh_again:
+            self._refresh_again = False
+            self.schedule_refresh()
+        QMessageBox.critical(self, "错误", message)
 
     def _apply_tasks(self, tasks):
         self.table.set_rows(
@@ -436,20 +463,11 @@ class DownloadTaskDetailDialog(QDialog):
 
     def _media_preview_card(self):
         widget = QWidget()
-        video = QVideoWidget()
-        player = QMediaPlayer(self)
-        audio = QAudioOutput(self)
-        player.setAudioOutput(audio)
-        player.setVideoOutput(video)
-        placeholder = QLabel("等待视频文件")
-        placeholder.setAlignment(Qt.AlignCenter)
-        placeholder.setObjectName("PreviewPlaceholder")
+        preview_widget = MpvPreview(self)
         play_button = make_button("播放/暂停")
         stop_button = make_button("停止")
         play_button.setEnabled(False)
         stop_button.setEnabled(False)
-        play_button.clicked.connect(lambda: self._toggle_media_player(player))
-        stop_button.clicked.connect(player.stop)
 
         controls = QHBoxLayout()
         controls.addWidget(play_button)
@@ -458,19 +476,18 @@ class DownloadTaskDetailDialog(QDialog):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
-        layout.addWidget(video, 1)
-        layout.addWidget(placeholder, 1)
+        layout.addWidget(preview_widget, 1)
         layout.addLayout(controls)
-        video.hide()
-        return {
+        preview = {
             "widget": widget,
-            "video": video,
-            "placeholder": placeholder,
-            "player": player,
+            "preview": preview_widget,
             "play_button": play_button,
             "stop_button": stop_button,
             "file_path": None,
         }
+        play_button.clicked.connect(lambda: self._toggle_media_preview(preview))
+        stop_button.clicked.connect(preview_widget.stop)
+        return preview
 
     def _current_task(self) -> dict:
         return self.download_service.get_youtube_task(self.task_id)
@@ -497,28 +514,19 @@ class DownloadTaskDetailDialog(QDialog):
 
     def _update_media_preview(self, preview, text: str, relative_path: str | None):
         if not relative_path:
-            preview["player"].stop()
             preview["file_path"] = None
-            preview["video"].hide()
-            preview["placeholder"].show()
-            preview["placeholder"].setText(text)
+            preview["preview"].set_placeholder(text)
             preview["play_button"].setEnabled(False)
             preview["stop_button"].setEnabled(False)
             return
         if preview["file_path"] != relative_path:
-            preview["player"].stop()
             preview["file_path"] = relative_path
-            preview["player"].setSource(QUrl.fromLocalFile(str(VIDEO_DIR / relative_path)))
-        preview["placeholder"].hide()
-        preview["video"].show()
+            preview["preview"].set_source(VIDEO_DIR / relative_path)
         preview["play_button"].setEnabled(True)
         preview["stop_button"].setEnabled(True)
 
-    def _toggle_media_player(self, player: QMediaPlayer):
-        if player.playbackState() == QMediaPlayer.PlayingState:
-            player.pause()
-        else:
-            player.play()
+    def _toggle_media_preview(self, preview):
+        preview["preview"].toggle_playback()
 
     def _youtube_embed_url(self, source_url: str) -> str:
         parsed = urlparse(source_url)
@@ -534,7 +542,7 @@ class DownloadTaskDetailDialog(QDialog):
     def closeEvent(self, event):
         self._auto_refresh_timer.stop()
         for preview in (self.local_preview, self.processed_preview):
-            preview["player"].stop()
+            preview["preview"].close()
         # Clean up WebEngine if it was created
         web = self.source_preview.get("web")
         if web:
