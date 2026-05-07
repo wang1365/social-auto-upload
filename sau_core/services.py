@@ -57,6 +57,14 @@ ProgressCallback = Callable[[dict], None]
 _logger = logging.getLogger("sau.services")
 
 PLATFORM_CHOICES = [(1, "小红书"), (2, "视频号"), (3, "抖音"), (4, "快手")]
+DEFAULT_PUBLISH_TOPIC_PRESETS = {
+    "AI / 自动化": ["AI", "自动化", "效率工具", "副业", "内容创作"],
+    "技术 / 编程": ["编程", "开源", "Python", "开发工具", "技术分享"],
+    "游戏 / 魔兽": ["魔兽世界", "游戏日常", "怀旧服", "网游", "游戏剪辑"],
+    "生活 / Vlog": ["生活记录", "日常", "Vlog", "治愈", "分享"],
+    "知识 / 干货": ["干货", "经验分享", "学习", "认知", "成长"],
+    "影视 / 剪辑": ["影视剪辑", "电影", "剧情", "高燃", "解说"],
+}
 
 
 class ServiceError(RuntimeError):
@@ -273,6 +281,70 @@ def delete_system_setting(setting_key: str) -> None:
         conn.commit()
 
 
+def normalize_publish_topic_presets(value) -> dict[str, list[str]]:
+    if not isinstance(value, dict):
+        return dict(DEFAULT_PUBLISH_TOPIC_PRESETS)
+    presets: dict[str, list[str]] = {}
+    for name, topics in value.items():
+        preset_name = str(name).strip()
+        if not preset_name:
+            continue
+        if isinstance(topics, str):
+            raw_topics = topics.split(",")
+        elif isinstance(topics, list):
+            raw_topics = topics
+        else:
+            continue
+        cleaned_topics = []
+        for topic in raw_topics:
+            topic_text = str(topic).strip().lstrip("#")
+            if topic_text and topic_text not in cleaned_topics:
+                cleaned_topics.append(topic_text)
+        if cleaned_topics:
+            presets[preset_name] = cleaned_topics
+    return presets or dict(DEFAULT_PUBLISH_TOPIC_PRESETS)
+
+
+def get_publish_topic_presets() -> dict[str, list[str]]:
+    raw_value = get_system_setting("publish_topic_presets", "")
+    if not raw_value:
+        return dict(DEFAULT_PUBLISH_TOPIC_PRESETS)
+    try:
+        return normalize_publish_topic_presets(json.loads(raw_value))
+    except ValueError:
+        return dict(DEFAULT_PUBLISH_TOPIC_PRESETS)
+
+
+def save_publish_topic_presets(presets: dict[str, list[str]]) -> dict[str, list[str]]:
+    normalized = normalize_publish_topic_presets(presets)
+    set_system_setting("publish_topic_presets", json.dumps(normalized, ensure_ascii=False))
+    return normalized
+
+
+def get_last_publish_selection() -> dict:
+    raw_value = get_system_setting("last_publish_selection", "")
+    if not raw_value:
+        return {}
+    try:
+        data = json.loads(raw_value)
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_last_publish_selection(selection: dict) -> dict:
+    normalized = {
+        "platformType": selection.get("platformType"),
+        "accountKeys": [
+            str(item)
+            for item in selection.get("accountKeys", [])
+            if str(item).strip()
+        ],
+    }
+    set_system_setting("last_publish_selection", json.dumps(normalized, ensure_ascii=False))
+    return normalized
+
+
 def get_video_processing_settings() -> dict:
     raw_value = get_system_setting("video_processing_config", "")
     return load_video_processing_config(raw_value)
@@ -348,9 +420,15 @@ class SettingsService:
             "youtubeCookieFileName": youtube_cookie_file,
             "youtubeCookieConfigured": bool(youtube_cookie_file),
             "videoProcessing": get_video_processing_settings(),
+            "publishTopicPresets": get_publish_topic_presets(),
         }
 
-    def save_settings(self, download_proxy: str = "", video_processing: dict | None = None) -> dict:
+    def save_settings(
+        self,
+        download_proxy: str = "",
+        video_processing: dict | None = None,
+        publish_topic_presets: dict[str, list[str]] | None = None,
+    ) -> dict:
         download_proxy = (download_proxy or "").strip()
         if download_proxy and not is_valid_proxy_url(download_proxy):
             raise ServiceError(
@@ -360,6 +438,8 @@ class SettingsService:
         set_system_setting("download_proxy", download_proxy)
         if video_processing is not None:
             save_video_processing_settings(video_processing)
+        if publish_topic_presets is not None:
+            save_publish_topic_presets(publish_topic_presets)
         return self.get_settings()
 
     def upload_youtube_cookie(self, source_path: Path) -> dict:
@@ -1049,6 +1129,15 @@ class DownloadService:
 
 
 class PublishService:
+    def get_topic_presets(self) -> dict[str, list[str]]:
+        return get_publish_topic_presets()
+
+    def get_last_selection(self) -> dict:
+        return get_last_publish_selection()
+
+    def save_last_selection(self, selection: dict) -> dict:
+        return save_last_publish_selection(selection)
+
     def publish(self, payload: dict) -> None:
         file_list = payload.get("fileList", [])
         account_list = payload.get("accountList", [])

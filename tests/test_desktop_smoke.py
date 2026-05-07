@@ -30,16 +30,19 @@ class DesktopSmokeTests(unittest.TestCase):
         class FakeSettingsService:
             def __init__(self):
                 self.saved = None
+                self.saved_topics = None
 
             def get_settings(self):
                 return {
                     "downloadProxy": "",
                     "youtubeCookieFileName": "",
                     "videoProcessing": dict(DEFAULT_VIDEO_PROCESSING_CONFIG),
+                    "publishTopicPresets": {"AI / 自动化": ["AI", "自动化"]},
                 }
 
-            def save_settings(self, download_proxy="", video_processing=None):
+            def save_settings(self, download_proxy="", video_processing=None, publish_topic_presets=None):
                 self.saved = video_processing
+                self.saved_topics = publish_topic_presets
                 return self.get_settings()
 
         app = QApplication.instance() or QApplication([])
@@ -58,6 +61,44 @@ class DesktopSmokeTests(unittest.TestCase):
 
         page.reset_video_processing()
         self.assertEqual(fake_settings.saved, DEFAULT_VIDEO_PROCESSING_CONFIG)
+        page.close()
+        app.processEvents()
+
+    def test_settings_page_saves_publish_topic_presets(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            from PySide6.QtWidgets import QApplication
+            from myUtils.video_processor import DEFAULT_VIDEO_PROCESSING_CONFIG
+            from sau_desktop.main import SettingsPage
+            from sau_desktop._shared import EventBus
+        except ImportError as exc:
+            self.skipTest(f"PySide6 is not installed: {exc}")
+
+        class FakeSettingsService:
+            def __init__(self):
+                self.saved_topics = None
+
+            def get_settings(self):
+                return {
+                    "downloadProxy": "",
+                    "youtubeCookieFileName": "",
+                    "videoProcessing": dict(DEFAULT_VIDEO_PROCESSING_CONFIG),
+                    "publishTopicPresets": {"旧预设": ["旧话题"]},
+                }
+
+            def save_settings(self, download_proxy="", video_processing=None, publish_topic_presets=None):
+                self.saved_topics = publish_topic_presets
+                return self.get_settings()
+
+        app = QApplication.instance() or QApplication([])
+        service = FakeSettingsService()
+        page = SettingsPage(service, object(), EventBus())
+        page.load()
+        page.publish_topic_presets.setPlainText("AI: AI, 自动化\n生活：日常, Vlog")
+
+        page.save()
+
+        self.assertEqual(service.saved_topics, {"AI": ["AI", "自动化"], "生活": ["日常", "Vlog"]})
         page.close()
         app.processEvents()
 
@@ -216,16 +257,26 @@ class DesktopSmokeTests(unittest.TestCase):
             def __init__(self):
                 self.payload = None
 
+            def get_topic_presets(self):
+                return {"AI / 自动化": ["AI", "自动化", "效率工具", "副业", "内容创作"]}
+
+            def get_last_selection(self):
+                return {}
+
+            def save_last_selection(self, selection):
+                self.selection = selection
+
             def publish(self, payload):
                 self.payload = payload
 
         app = QApplication.instance() or QApplication([])
         publish_service = FakePublishService()
         original_run_background = publish_page_module.run_background
+        original_information = publish_page_module.QMessageBox.information
         publish_page_module.run_background = lambda parent, fn, on_done=None, on_error=None: (
-            fn(),
-            on_done(None) if on_done else None,
+            on_done(fn()) if on_done else fn(),
         )
+        publish_page_module.QMessageBox.information = lambda *args, **kwargs: None
         try:
             page = PublishPage(FakeMaterialService(), FakeAccountService(), publish_service, EventBus())
             page.refresh()
@@ -240,12 +291,141 @@ class DesktopSmokeTests(unittest.TestCase):
             self.assertEqual(publish_service.payload["accountList"], ["ks.json"])
             self.assertEqual(publish_service.payload["type"], 4)
             self.assertEqual(publish_service.payload["tags"], ["tag1", "tag2"])
+            self.assertEqual(page.accounts.item(0, 4).text(), "发布成功")
             page.close()
             app.processEvents()
         finally:
             publish_page_module.run_background = original_run_background
+            publish_page_module.QMessageBox.information = original_information
 
-    def test_publish_page_appends_builtin_topic_presets(self):
+    def test_publish_page_shows_loading_and_account_publish_result(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            from PySide6.QtCore import Qt
+            from PySide6.QtWidgets import QApplication
+            from sau_desktop._shared import EventBus
+            from sau_desktop.pages.publish_page import PublishPage
+            import sau_desktop.pages.publish_page as publish_page_module
+        except ImportError as exc:
+            self.skipTest(f"PySide6 is not installed: {exc}")
+
+        class FakeMaterialService:
+            def list_materials(self):
+                return [{"filename": "demo.mp4", "source_type": "youtube", "file_path": "stored-demo.mp4"}]
+
+        class FakeAccountService:
+            def list_accounts(self):
+                return [{"type": 4, "platform": "快手", "userName": "KS", "status": 1, "filePath": "ks.json"}]
+
+        class FakePublishService:
+            def get_topic_presets(self):
+                return {}
+
+            def get_last_selection(self):
+                return {}
+
+            def save_last_selection(self, selection):
+                self.selection = selection
+
+            def publish(self, payload):
+                return None
+
+        app = QApplication.instance() or QApplication([])
+        callbacks = {}
+        original_run_background = publish_page_module.run_background
+        original_information = publish_page_module.QMessageBox.information
+
+        def fake_run_background(parent, fn, on_done=None, on_error=None):
+            callbacks["fn"] = fn
+            callbacks["on_done"] = on_done
+            callbacks["on_error"] = on_error
+
+        publish_page_module.run_background = fake_run_background
+        publish_page_module.QMessageBox.information = lambda *args, **kwargs: None
+        try:
+            page = PublishPage(FakeMaterialService(), FakeAccountService(), FakePublishService(), EventBus())
+            page.refresh()
+            page.materials.item(0, 0).setCheckState(Qt.Checked)
+            page.accounts.item(0, 0).setCheckState(Qt.Checked)
+            page.title.setText("Title")
+
+            page.publish()
+
+            self.assertFalse(page.publish_button.isEnabled())
+            self.assertFalse(page.publish_loading.isHidden())
+            self.assertEqual(page.accounts.item(0, 4).text(), "发布中...")
+            self.assertIn("开始发布", page.log.toPlainText())
+
+            callbacks["on_done"](callbacks["fn"]())
+
+            self.assertTrue(page.publish_button.isEnabled())
+            self.assertTrue(page.publish_loading.isHidden())
+            self.assertEqual(page.accounts.item(0, 4).text(), "发布成功")
+            self.assertIn("快手：发布成功", page.log.toPlainText())
+            page.close()
+            app.processEvents()
+        finally:
+            publish_page_module.run_background = original_run_background
+            publish_page_module.QMessageBox.information = original_information
+
+    def test_publish_page_records_failed_account_publish_result(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            from PySide6.QtCore import Qt
+            from PySide6.QtWidgets import QApplication
+            from sau_desktop._shared import EventBus
+            from sau_desktop.pages.publish_page import PublishPage
+            import sau_desktop.pages.publish_page as publish_page_module
+        except ImportError as exc:
+            self.skipTest(f"PySide6 is not installed: {exc}")
+
+        class FakeMaterialService:
+            def list_materials(self):
+                return [{"filename": "demo.mp4", "source_type": "youtube", "file_path": "stored-demo.mp4"}]
+
+        class FakeAccountService:
+            def list_accounts(self):
+                return [{"type": 4, "platform": "快手", "userName": "KS", "status": 1, "filePath": "ks.json"}]
+
+        class FakePublishService:
+            def get_topic_presets(self):
+                return {}
+
+            def get_last_selection(self):
+                return {}
+
+            def save_last_selection(self, selection):
+                self.selection = selection
+
+            def publish(self, payload):
+                raise RuntimeError("上传超时")
+
+        app = QApplication.instance() or QApplication([])
+        original_run_background = publish_page_module.run_background
+        original_warning = publish_page_module.QMessageBox.warning
+        publish_page_module.run_background = lambda parent, fn, on_done=None, on_error=None: (
+            on_done(fn()) if on_done else None
+        )
+        publish_page_module.QMessageBox.warning = lambda *args, **kwargs: None
+        try:
+            page = PublishPage(FakeMaterialService(), FakeAccountService(), FakePublishService(), EventBus())
+            page.refresh()
+            page.materials.item(0, 0).setCheckState(Qt.Checked)
+            page.accounts.item(0, 0).setCheckState(Qt.Checked)
+            page.title.setText("Title")
+
+            page.publish()
+
+            self.assertEqual(page.accounts.item(0, 4).text(), "发布失败：上传超时")
+            self.assertIn("快手：发布失败：上传超时", page.log.toPlainText())
+            self.assertIn("失败 1", page.publish_status.text())
+            page.close()
+            app.processEvents()
+        finally:
+            publish_page_module.run_background = original_run_background
+            publish_page_module.QMessageBox.warning = original_warning
+
+    def test_publish_page_applies_configured_topic_preset_on_change(self):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         try:
             from PySide6.QtWidgets import QApplication
@@ -262,14 +442,100 @@ class DesktopSmokeTests(unittest.TestCase):
             def list_accounts(self):
                 return []
 
+        class FakePublishService:
+            def get_topic_presets(self):
+                return {"AI / 自动化": ["AI", "自动化", "效率工具"]}
+
+            def get_last_selection(self):
+                return {}
+
+            def save_last_selection(self, selection):
+                pass
+
         app = QApplication.instance() or QApplication([])
-        page = PublishPage(FakeMaterialService(), FakeAccountService(), object(), EventBus())
-        page.tags.setText("#已有, AI")
+        page = PublishPage(FakeMaterialService(), FakeAccountService(), FakePublishService(), EventBus())
         page.topic_preset.setCurrentText("AI / 自动化")
 
-        page.add_topic_preset()
+        self.assertEqual(page._parse_tags(), ["AI", "自动化", "效率工具"])
+        page.close()
+        app.processEvents()
 
-        self.assertEqual(page._parse_tags(), ["已有", "AI", "自动化", "效率工具", "副业", "内容创作"])
+    def test_publish_page_restores_last_platform_and_account_selection(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            from PySide6.QtCore import Qt
+            from PySide6.QtWidgets import QApplication
+            from sau_desktop._shared import EventBus
+            from sau_desktop.pages.publish_page import PublishPage
+        except ImportError as exc:
+            self.skipTest(f"PySide6 is not installed: {exc}")
+
+        class FakeMaterialService:
+            def list_materials(self):
+                return []
+
+        class FakeAccountService:
+            def list_accounts(self):
+                return [
+                    {"id": 1, "type": 3, "platform": "抖音", "userName": "DY", "status": 1, "filePath": "dy.json"},
+                    {"id": 2, "type": 4, "platform": "快手", "userName": "KS", "status": 1, "filePath": "ks.json"},
+                ]
+
+        class FakePublishService:
+            def get_topic_presets(self):
+                return {}
+
+            def get_last_selection(self):
+                return {"platformType": 4, "accountKeys": ["2"]}
+
+            def save_last_selection(self, selection):
+                pass
+
+        app = QApplication.instance() or QApplication([])
+        page = PublishPage(FakeMaterialService(), FakeAccountService(), FakePublishService(), EventBus())
+        page.refresh()
+
+        self.assertEqual(page.platform_filter.currentData(), 4)
+        self.assertEqual(page.accounts.rowCount(), 1)
+        self.assertEqual(page.accounts.item(0, 2).text(), "KS")
+        self.assertEqual(page.accounts.item(0, 0).checkState(), Qt.Checked)
+        page.close()
+        app.processEvents()
+
+    def test_publish_page_auto_generates_title_from_selected_material(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            from PySide6.QtCore import Qt
+            from PySide6.QtWidgets import QApplication
+            from sau_desktop._shared import EventBus
+            from sau_desktop.pages.publish_page import PublishPage
+        except ImportError as exc:
+            self.skipTest(f"PySide6 is not installed: {exc}")
+
+        class FakeMaterialService:
+            def list_materials(self):
+                return [{"filename": "fallback.mp4", "source_type": "youtube", "file_path": "stored.mp4", "video_title_zh": "自动标题"}]
+
+        class FakeAccountService:
+            def list_accounts(self):
+                return []
+
+        class FakePublishService:
+            def get_topic_presets(self):
+                return {}
+
+            def get_last_selection(self):
+                return {}
+
+            def save_last_selection(self, selection):
+                pass
+
+        app = QApplication.instance() or QApplication([])
+        page = PublishPage(FakeMaterialService(), FakeAccountService(), FakePublishService(), EventBus())
+        page.refresh()
+        page.materials.item(0, 0).setCheckState(Qt.Checked)
+
+        self.assertEqual(page.title.text(), "自动标题")
         page.close()
         app.processEvents()
 

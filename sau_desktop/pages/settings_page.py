@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QSpinBox,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -63,6 +64,9 @@ class SettingsPage(QWidget):
         self.hardware = QComboBox()
         self.hardware.addItems(["cpu", "gpu"])
         self.hardware.setFixedWidth(90)
+        self.publish_topic_presets = QTextEdit()
+        self.publish_topic_presets.setMaximumHeight(120)
+        self.publish_topic_presets.setPlaceholderText("AI / 自动化: AI, 自动化, 效率工具")
 
         proxy_form = QFormLayout()
         proxy_form.setLabelAlignment(Qt.AlignRight)
@@ -109,6 +113,14 @@ class SettingsPage(QWidget):
         video_layout.addLayout(video_actions)
         video_group = self._settings_group("视频处理", video_layout)
 
+        publish_form = QFormLayout()
+        publish_form.setLabelAlignment(Qt.AlignRight)
+        publish_form.addRow("预设话题", self.publish_topic_presets)
+        publish_tip = QLabel("每行一个预设，格式：预设名: 话题1, 话题2, 话题3")
+        publish_tip.setObjectName("PageSubtitle")
+        publish_form.addRow("", publish_tip)
+        publish_group = self._settings_group("发布设置", publish_form)
+
         buttons = QHBoxLayout()
         for button in [
             make_button("保存", self.save, primary=True),
@@ -124,6 +136,7 @@ class SettingsPage(QWidget):
         layout.addWidget(proxy_group)
         layout.addWidget(cookie_group)
         layout.addWidget(video_group)
+        layout.addWidget(publish_group)
         layout.addLayout(buttons)
         layout.addStretch()
 
@@ -151,6 +164,7 @@ class SettingsPage(QWidget):
         ):
             spinbox.valueChanged.connect(self._mark_dirty)
         self.hardware.currentIndexChanged.connect(self._mark_dirty)
+        self.publish_topic_presets.textChanged.connect(self._mark_dirty)
 
     def _mark_dirty(self):
         self._dirty = True
@@ -220,12 +234,19 @@ class SettingsPage(QWidget):
         self.edge_guard_pixels.setValue(int(config.get("edgeGuardPixels", 8)))
         self.max_concurrent.setValue(int(config.get("maxConcurrent", 4)))
         self.hardware.setCurrentText(config.get("hardwareMode", "cpu"))
+        self.publish_topic_presets.setPlainText(self._format_topic_presets(settings.get("publishTopicPresets", {})))
         self._dirty = False
 
     def save(self):
+        try:
+            topic_presets = self._parse_topic_presets()
+        except ValueError as exc:
+            QMessageBox.warning(self, "发布设置", str(exc))
+            return
         self.settings_service.save_settings(
             self.proxy.text(),
             self._video_processing_payload(),
+            publish_topic_presets=topic_presets,
         )
         self._dirty = False
         self.event_bus.settings_changed.emit()
@@ -263,6 +284,41 @@ class SettingsPage(QWidget):
             "maxConcurrent": self.max_concurrent.value(),
             "hardwareMode": self.hardware.currentText(),
         }
+
+    def _format_topic_presets(self, presets: dict) -> str:
+        lines = []
+        for name, topics in (presets or {}).items():
+            if not isinstance(topics, list):
+                continue
+            topic_text = ", ".join(str(topic).strip().lstrip("#") for topic in topics if str(topic).strip())
+            if topic_text:
+                lines.append(f"{name}: {topic_text}")
+        return "\n".join(lines)
+
+    def _parse_topic_presets(self) -> dict[str, list[str]]:
+        presets: dict[str, list[str]] = {}
+        for line_number, raw_line in enumerate(self.publish_topic_presets.toPlainText().splitlines(), start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            if ":" not in line and "：" not in line:
+                raise ValueError(f"第 {line_number} 行格式不正确，请使用：预设名: 话题1, 话题2")
+            separator = ":" if ":" in line else "："
+            name, raw_topics = line.split(separator, 1)
+            name = name.strip()
+            if not name:
+                raise ValueError(f"第 {line_number} 行缺少预设名")
+            topics = []
+            for topic in raw_topics.replace("，", ",").split(","):
+                topic_text = topic.strip().lstrip("#")
+                if topic_text and topic_text not in topics:
+                    topics.append(topic_text)
+            if not topics:
+                raise ValueError(f"第 {line_number} 行至少需要一个话题")
+            presets[name] = topics
+        if not presets:
+            raise ValueError("请至少配置一个预设话题")
+        return presets
 
     def import_youtube_cookie(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择 cookies.txt", "", "Text (*.txt)")
