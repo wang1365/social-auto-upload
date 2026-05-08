@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QProgressBar,
+    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -41,6 +42,8 @@ class PublishPage(QWidget):
         self.materials = DenseTable(["文件名", "来源"], [360, 120])
         # P0: 隐藏 ID 列，增加状态列便于识别可用账号
         self.accounts = DenseTable(["平台", "用户名", "状态", "发布结果"], [100, 160, 80, 220])
+        self.materials.setFixedHeight(190)
+        self.accounts.setFixedHeight(190)
         self.platform_filter = QComboBox()
         self.platform_filter.currentIndexChanged.connect(self._on_platform_filter_changed)
 
@@ -63,6 +66,7 @@ class PublishPage(QWidget):
         self.log.setReadOnly(True)
         self.log.setMaximumHeight(140)
         self.log_section = CollapsibleSection("运行日志", self.log, expanded=False)
+        self.log_section.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         self.publish_status = QLabel("")
         self.publish_status.setObjectName("SelectionInfo")
@@ -91,18 +95,51 @@ class PublishPage(QWidget):
         actions.addWidget(self.publish_status)
         actions.addStretch()
 
+        material_panel = QWidget()
+        material_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        material_layout = QVBoxLayout(material_panel)
+        material_layout.setContentsMargins(0, 0, 0, 0)
+        material_layout.setSpacing(6)
+        material_layout.addWidget(step1_label)
+        material_layout.addWidget(self.materials)
+
+        account_panel = QWidget()
+        account_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        account_layout = QVBoxLayout(account_panel)
+        account_layout.setContentsMargins(0, 0, 0, 0)
+        account_layout.setSpacing(6)
+        account_layout.addWidget(step2_label)
+        account_layout.addWidget(self.platform_filter)
+        account_layout.addWidget(self.accounts)
+
+        selection_panel = QWidget()
+        selection_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        selection_layout = QHBoxLayout(selection_panel)
+        selection_layout.setContentsMargins(0, 0, 0, 0)
+        selection_layout.setSpacing(10)
+        selection_layout.addWidget(material_panel, 1, Qt.AlignTop)
+        selection_layout.addWidget(account_panel, 1, Qt.AlignTop)
+
+        publish_form = QWidget()
+        publish_form.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        publish_form.setLayout(form)
+
+        actions_widget = QWidget()
+        actions_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        actions_widget.setLayout(actions)
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 10, 14, 10)
-        layout.setSpacing(10)
-        layout.addWidget(page_header("发布中心", "选择素材和账号后提交发布任务"))
-        layout.addWidget(step1_label)
-        layout.addWidget(self.materials, 1)
-        layout.addWidget(step2_label)
-        layout.addWidget(self.platform_filter)
-        layout.addWidget(self.accounts, 1)
-        layout.addLayout(form)
-        layout.addLayout(actions)
+        layout.setContentsMargins(14, 8, 14, 8)
+        layout.setSpacing(8)
+        header = page_header("发布中心", "选择素材和账号后提交发布任务")
+        header.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        header.setMaximumHeight(54)
+        layout.addWidget(header)
+        layout.addWidget(selection_panel)
+        layout.addWidget(publish_form)
+        layout.addWidget(actions_widget)
         layout.addWidget(self.log_section)
+        layout.addStretch(1)
 
         self.event_bus.accounts_changed.connect(self.refresh)
         self.event_bus.materials_changed.connect(self.refresh)

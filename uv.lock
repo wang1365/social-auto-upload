@@ -138,6 +138,15 @@ wheels = [
 ]
 
 [[package]]
+name = "mpv"
+version = "1.0.8"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e3/d2/4ede498dff29520abb40d2b197bcb4188db4a03981d734ceb990a6532260/mpv-1.0.8.tar.gz", hash = "sha256:95dbd4d869cd8de7a27914ad33e776accc0f01cb82a6d5b31ca439ade2208ffb", size = 48014, upload-time = "2025-04-25T09:51:19.031Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f4/cf/0d5f52753366ecf2c3d763e331dcda54b0f20a1a8e52b175feb9c625399d/mpv-1.0.8-py3-none-any.whl", hash = "sha256:dcf77f612e3f5ce49bd89393f37d286de7ac290db6b0800f1fdcfe0aeb5ba9b8", size = 46078, upload-time = "2025-04-25T09:51:17.087Z" },
+]
+
+[[package]]
 name = "numpy"
 version = "2.2.6"
 source = { registry = "https://pypi.org/simple" }
@@ -374,6 +383,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "loguru" },
+    { name = "mpv" },
     { name = "opencv-python" },
     { name = "patchright" },
     { name = "pyside6" },
@@ -386,6 +396,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "loguru", specifier = "==0.7.3" },
+    { name = "mpv", specifier = "==1.0.8" },
     { name = "opencv-python", specifier = ">=4.13.0.92" },
     { name = "patchright", specifier = "==1.58.2" },
     { name = "pyside6", specifier = ">=6.7,<7" },
