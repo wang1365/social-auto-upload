@@ -65,7 +65,7 @@ class SettingsPage(QWidget):
         self.hardware.addItems(["cpu", "gpu"])
         self.hardware.setFixedWidth(90)
         self.publish_topic_presets = QTextEdit()
-        self.publish_topic_presets.setMaximumHeight(120)
+        self.publish_topic_presets.setMinimumHeight(260)
         self.publish_topic_presets.setPlaceholderText("AI / 自动化: AI, 自动化, 效率工具")
 
         proxy_form = QFormLayout()
@@ -115,11 +115,17 @@ class SettingsPage(QWidget):
 
         publish_form = QFormLayout()
         publish_form.setLabelAlignment(Qt.AlignRight)
+        publish_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         publish_form.addRow("预设话题", self.publish_topic_presets)
         publish_tip = QLabel("每行一个预设，格式：预设名: 话题1, 话题2, 话题3")
         publish_tip.setObjectName("PageSubtitle")
         publish_form.addRow("", publish_tip)
         publish_group = self._settings_group("发布设置", publish_form)
+
+        middle_row = QHBoxLayout()
+        middle_row.setSpacing(10)
+        middle_row.addWidget(video_group, 3)
+        middle_row.addWidget(publish_group, 2)
 
         buttons = QHBoxLayout()
         for button in [
@@ -135,8 +141,7 @@ class SettingsPage(QWidget):
         layout.addWidget(page_header("系统设置", "代理、YouTube Cookie 和视频处理参数"))
         layout.addWidget(proxy_group)
         layout.addWidget(cookie_group)
-        layout.addWidget(video_group)
-        layout.addWidget(publish_group)
+        layout.addLayout(middle_row, 1)
         layout.addLayout(buttons)
         layout.addStretch()
 

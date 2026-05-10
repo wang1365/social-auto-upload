@@ -51,6 +51,11 @@ class DesktopSmokeTests(unittest.TestCase):
 
         page = SettingsPage(fake_settings, object(), EventBus())
 
+        middle_row = page.layout().itemAt(3).layout()
+        self.assertEqual(middle_row.count(), 2)
+        self.assertGreaterEqual(page.publish_topic_presets.minimumHeight(), 260)
+        self.assertGreater(page.publish_topic_presets.maximumHeight(), 120)
+
         payload = page._video_processing_payload()
         self.assertEqual(set(payload), set(DEFAULT_VIDEO_PROCESSING_CONFIG))
         page.trim_head_enabled.setChecked(False)
@@ -194,12 +199,38 @@ class DesktopSmokeTests(unittest.TestCase):
         dialog.close()
         app.processEvents()
 
+    def test_local_video_preview_prefers_qt_and_keeps_mpv_install_hint(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            from PySide6.QtWidgets import QApplication
+            from sau_desktop.mpv_preview import LIBMPV_INSTALL_URL_CN, LocalVideoPreview, MpvPreview
+        except ImportError as exc:
+            self.skipTest(f"PySide6 is not installed: {exc}")
+
+        app = QApplication.instance() or QApplication([])
+        preview = LocalVideoPreview()
+
+        self.assertIn(preview._active_preview, (preview.qt_preview, preview.mpv_preview))
+        self.assertIn("sourceforge.net", LIBMPV_INSTALL_URL_CN)
+
+        mpv_preview = MpvPreview()
+        mpv_preview._load_error = (
+            "未检测到可用的 libmpv。请安装 mpv/libmpv 运行时，"
+            f"国内可访问下载地址：{LIBMPV_INSTALL_URL_CN}"
+        )
+        self.assertIn(LIBMPV_INSTALL_URL_CN, mpv_preview._load_error)
+
+        preview.close()
+        mpv_preview.close()
+        app.processEvents()
+
     def test_download_page_uses_compact_columns_and_keeps_task_payload(self):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         try:
             from PySide6.QtCore import Qt
             from PySide6.QtWidgets import QApplication
             from sau_desktop.main import DownloadPage
+            import sau_desktop.pages.download_page as download_page_module
         except ImportError as exc:
             self.skipTest(f"PySide6 is not installed: {exc}")
 
@@ -223,16 +254,26 @@ class DesktopSmokeTests(unittest.TestCase):
         app = QApplication.instance() or QApplication([])
         from sau_desktop._shared import EventBus
 
-        page = DownloadPage(FakeDownloadService(), EventBus())
+        original_run_background = download_page_module.run_background
+        download_page_module.run_background = lambda parent, fn, on_done=None, on_error=None: (
+            on_done(fn()) if on_done else fn()
+        )
+        try:
+            page = DownloadPage(FakeDownloadService(), EventBus())
+            page.refresh()
+            app.processEvents()
 
-        headers = [page.table.horizontalHeaderItem(index).text() for index in range(page.table.columnCount())]
-        self.assertEqual(headers, ["", "下载时间", "下载进度", "标题", "分辨率", "文件大小"])
-        self.assertEqual(page.table.item(0, 1).text(), "42%  正在下载")
-        self.assertEqual(page.table.item(0, 3).text(), "1920x1080")
-        self.assertEqual(page.table.item(0, 4).text(), "12.35 MB")
-        self.assertEqual(page.table.item(0, 0).data(Qt.UserRole + 1)["taskId"], "task-1")
-        page.close()
-        app.processEvents()
+            headers = [page.table.horizontalHeaderItem(index).text() for index in range(page.table.columnCount())]
+            self.assertEqual(headers, ["", "下载时间", "下载进度", "标题", "分辨率", "文件大小"])
+            self.assertEqual(page.table.item(0, 1).text(), "2026-04-26 12:00:00")
+            self.assertEqual(page.table.item(0, 2).text(), "42%  正在下载")
+            self.assertEqual(page.table.item(0, 4).text(), "1920x1080")
+            self.assertEqual(page.table.item(0, 5).text(), "12.35 MB")
+            self.assertEqual(page.table.item(0, 0).data(Qt.UserRole + 1)["taskId"], "task-1")
+            page.close()
+            app.processEvents()
+        finally:
+            download_page_module.run_background = original_run_background
 
     def test_publish_page_uses_checked_rows_for_selected_payload(self):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

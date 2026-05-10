@@ -184,6 +184,7 @@ package-lock.json
 db/database.db
 
 # 临时文件夹
+.omx/
 cookiesFile
 uploadFile
 videoFile

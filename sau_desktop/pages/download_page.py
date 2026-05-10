@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 
 from sau_core.services import DownloadService, ServiceError, VIDEO_DIR
 from sau_desktop._shared import DenseTable, EventBus, make_button, page_header, run_background
-from sau_desktop.mpv_preview import MpvPreview
+from sau_desktop.mpv_preview import LocalVideoPreview
 
 
 class DownloadPage(QWidget):
@@ -463,7 +463,7 @@ class DownloadTaskDetailDialog(QDialog):
 
     def _media_preview_card(self):
         widget = QWidget()
-        preview_widget = MpvPreview(self)
+        preview_widget = LocalVideoPreview(self)
         play_button = make_button("播放/暂停")
         stop_button = make_button("停止")
         play_button.setEnabled(False)
