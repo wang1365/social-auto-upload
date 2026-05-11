@@ -90,6 +90,33 @@ class ServiceLayerTests(unittest.TestCase):
                     callback=None,
                 )
 
+    def test_download_progress_parses_ansi_percent_and_cleans_text(self):
+        download_service = services.DownloadService()
+        status = {
+            "status": "downloading",
+            "_percent_str": "\x1b[0;94m 32.4%\x1b[0m",
+            "_speed_str": "\x1b[0;32m 120.88KiB/s\x1b[0m",
+            "_eta_str": "\x1b[0;33m02:54\x1b[0m",
+            "downloaded_bytes": 324,
+            "total_bytes": 1000,
+        }
+
+        fields = download_service._extract_progress_fields(status)
+        text = download_service._format_download_progress(status)
+
+        self.assertEqual(fields["progress_percent"], 32.4)
+        self.assertEqual(fields["speed_text"], "120.88KiB/s")
+        self.assertEqual(fields["eta_text"], "02:54")
+        self.assertEqual(text, "32.4% | 120.88KiB/s | ETA 02:54")
+
+    def test_download_progress_falls_back_to_bytes_when_percent_string_missing(self):
+        download_service = services.DownloadService()
+        fields = download_service._extract_progress_fields(
+            {"status": "downloading", "downloaded_bytes": 25, "total_bytes": 200}
+        )
+
+        self.assertEqual(fields["progress_percent"], 12.5)
+
     def test_publish_service_dispatches_platform(self):
         publish_service = services.PublishService()
         with patch("sau_core.services.post_video_DouYin") as post_douyin:

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QSignalBlocker
+from PySide6.QtCore import Qt, QSignalBlocker, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
     QHBoxLayout,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QSizePolicy,
@@ -20,7 +22,7 @@ from PySide6.QtWidgets import (
 from sau_core.services import AccountService, MaterialService, PublishService
 from sau_desktop._shared import (
     DenseTable, EventBus, make_button, page_header, run_background,
-    CollapsibleSection,
+    CollapsibleSection, reveal_file_in_folder,
 )
 
 
@@ -40,6 +42,8 @@ class PublishPage(QWidget):
 
         # P0: 隐藏 ID 列和路径列，用户只需看文件名
         self.materials = DenseTable(["文件名", "来源"], [360, 120])
+        self.materials.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.materials.customContextMenuRequested.connect(self.show_material_context_menu)
         # P0: 隐藏 ID 列，增加状态列便于识别可用账号
         self.accounts = DenseTable(["平台", "用户名", "状态", "发布结果"], [100, 160, 80, 220])
         self.materials.setFixedHeight(190)
@@ -147,6 +151,62 @@ class PublishPage(QWidget):
         self.materials.selection_changed.connect(lambda _: self._auto_fill_title_from_selection())
         self._load_last_selection()
         self._reload_topic_presets()
+
+    def selected_material(self) -> dict | None:
+        row = self.materials.currentRow()
+        if row < 0:
+            return None
+        payload = self.materials.get_payload(row)
+        return payload if isinstance(payload, dict) else None
+
+    def show_material_context_menu(self, position):
+        row = self.materials.rowAt(position.y())
+        if row >= 0:
+            self.materials.selectRow(row)
+        material = self.selected_material()
+        if not material:
+            return
+        menu = QMenu(self)
+        preview_action = menu.addAction("打开预览")
+        reveal_action = menu.addAction("打开所在文件夹")
+        delete_action = menu.addAction("删除")
+        action = menu.exec(self.materials.viewport().mapToGlobal(position))
+        if action == preview_action:
+            self.open_preview()
+        elif action == reveal_action:
+            self.open_selected_material_location()
+        elif action == delete_action:
+            self.delete_material()
+
+    def selected_material_path(self):
+        material = self.selected_material()
+        if not material:
+            return None
+        relative_path = material.get("file_path") or material.get("filePath")
+        if not relative_path:
+            return None
+        return self.material_service.resolve_material_path(relative_path)
+
+    def open_preview(self):
+        path = self.selected_material_path()
+        if not path:
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def open_selected_material_location(self):
+        path = self.selected_material_path()
+        if not path:
+            return
+        if not reveal_file_in_folder(path):
+            QMessageBox.warning(self, "打开文件夹", "文件不存在，无法定位。")
+
+    def delete_material(self):
+        material = self.selected_material()
+        if not material or not material.get("id"):
+            return
+        if QMessageBox.question(self, "确认删除", "删除选中素材文件和记录？") == QMessageBox.Yes:
+            self.material_service.delete_material(material["id"])
+            self.event_bus.materials_changed.emit()
 
     def refresh(self):
         materials = self.material_service.list_materials()

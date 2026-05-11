@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QWidget, QVBoxLayout, QHBoxLayout
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import QLabel, QWidget, QVBoxLayout, QHBoxLayout, QMenu, QMessageBox
 
 from sau_core.services import AccountService, MaterialService
 from sau_desktop._shared import (
-    DenseTable, EventBus, make_button, page_header, kpi_card,
+    DenseTable, EventBus, make_button, page_header, kpi_card, reveal_file_in_folder,
 )
 
 
@@ -34,6 +35,8 @@ class DashboardPage(QWidget):
             ["文件名", "来源", "大小(MB)", "时间"],
             [340, 100, 90, 170],
         )
+        self.recent_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.recent_table.customContextMenuRequested.connect(self.show_context_menu)
         refresh = make_button("刷新", self.refresh, primary=True)
 
         # 工具栏：按钮紧跟刷新
@@ -84,4 +87,59 @@ class DashboardPage(QWidget):
                 m.get("upload_time"),
             ]
             for m in materials[:30]
-        ])
+        ], payloads=materials[:30])
+
+    def selected_material(self) -> dict | None:
+        row = self.recent_table.currentRow()
+        if row < 0:
+            return None
+        payload = self.recent_table.get_payload(row)
+        return payload if isinstance(payload, dict) else None
+
+    def open_preview(self):
+        material = self.selected_material()
+        if not material:
+            return
+        relative_path = material.get("file_path") or material.get("filePath")
+        if not relative_path:
+            return
+        path = self.material_service.resolve_material_path(relative_path)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def open_selected_material_location(self):
+        material = self.selected_material()
+        if not material:
+            return
+        relative_path = material.get("file_path") or material.get("filePath")
+        if not relative_path:
+            return
+        path = self.material_service.resolve_material_path(relative_path)
+        if not reveal_file_in_folder(path):
+            QMessageBox.warning(self, "打开文件夹", "文件不存在，无法定位。")
+
+    def delete_material(self):
+        material = self.selected_material()
+        if not material or not material.get("id"):
+            return
+        if QMessageBox.question(self, "确认删除", "删除选中素材文件和记录？") == QMessageBox.Yes:
+            self.material_service.delete_material(material["id"])
+            self.event_bus.materials_changed.emit()
+
+    def show_context_menu(self, position):
+        row = self.recent_table.rowAt(position.y())
+        if row >= 0:
+            self.recent_table.selectRow(row)
+        material = self.selected_material()
+        if not material:
+            return
+        menu = QMenu(self)
+        preview_action = menu.addAction("打开预览")
+        reveal_action = menu.addAction("打开所在文件夹")
+        delete_action = menu.addAction("删除")
+        action = menu.exec(self.recent_table.viewport().mapToGlobal(position))
+        if action == preview_action:
+            self.open_preview()
+        elif action == reveal_action:
+            self.open_selected_material_location()
+        elif action == delete_action:
+            self.delete_material()

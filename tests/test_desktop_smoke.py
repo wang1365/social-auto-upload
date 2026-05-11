@@ -580,6 +580,282 @@ class DesktopSmokeTests(unittest.TestCase):
         page.close()
         app.processEvents()
 
+    def test_reveal_file_in_folder_splits_windows_select_argument(self):
+        try:
+            from pathlib import Path
+            from tempfile import TemporaryDirectory
+            import sau_desktop._shared as shared
+        except ImportError as exc:
+            self.skipTest(f"PySide6 is not installed: {exc}")
+
+        launched = {}
+        original_platform = shared.sys.platform
+        original_start_detached = shared.QProcess.startDetached
+        shared.sys.platform = "win32"
+        shared.QProcess.startDetached = lambda program, args: launched.update({"program": program, "args": args}) or True
+        try:
+            with TemporaryDirectory() as tmp_dir:
+                target = Path(tmp_dir) / "demo file.mp4"
+                target.write_bytes(b"video")
+
+                self.assertTrue(shared.reveal_file_in_folder(target))
+
+            self.assertEqual(launched["program"], "explorer.exe")
+            self.assertEqual(launched["args"][0], "/select,")
+            self.assertEqual(len(launched["args"]), 2)
+            self.assertNotIn("demo file.mp4", launched["args"][0])
+        finally:
+            shared.sys.platform = original_platform
+            shared.QProcess.startDetached = original_start_detached
+
+    def test_material_page_reveals_selected_material_location(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            from pathlib import Path
+            from PySide6.QtWidgets import QApplication
+            from sau_desktop._shared import EventBus
+            from sau_desktop.pages.material_page import MaterialPage
+            import sau_desktop.pages.material_page as material_page_module
+        except ImportError as exc:
+            self.skipTest(f"PySide6 is not installed: {exc}")
+
+        class FakeMaterialService:
+            def list_materials(self):
+                return [{"id": 1, "filename": "demo.mp4", "source_type": "local", "file_path": "stored-demo.mp4"}]
+
+            def resolve_material_path(self, relative_path):
+                return Path("D:/videos") / relative_path
+
+        app = QApplication.instance() or QApplication([])
+        revealed = []
+        original_reveal = material_page_module.reveal_file_in_folder
+        material_page_module.reveal_file_in_folder = lambda path: revealed.append(Path(path)) or True
+        try:
+            page = MaterialPage(FakeMaterialService(), EventBus())
+            page.refresh()
+            page.table.selectRow(0)
+
+            page.open_selected_material_location()
+
+            self.assertEqual(revealed, [Path("D:/videos/stored-demo.mp4")])
+            page.close()
+            app.processEvents()
+        finally:
+            material_page_module.reveal_file_in_folder = original_reveal
+
+    def test_download_page_reveals_selected_video_location(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            from pathlib import Path
+            from PySide6.QtWidgets import QApplication
+            from sau_desktop._shared import EventBus
+            from sau_desktop.pages.download_page import DownloadPage
+            import sau_desktop.pages.download_page as download_page_module
+        except ImportError as exc:
+            self.skipTest(f"PySide6 is not installed: {exc}")
+
+        class FakeDownloadService:
+            def list_youtube_tasks(self):
+                return [
+                    {
+                        "taskId": "task-1",
+                        "status": "success",
+                        "createdAt": "2026-04-26 12:00:00",
+                        "videoTitleZh": "demo",
+                        "filePath": "downloaded.mp4",
+                        "processedFilePath": "processed.mp4",
+                    }
+                ]
+
+            def get_youtube_task(self, task_id):
+                return self.list_youtube_tasks()[0]
+
+        app = QApplication.instance() or QApplication([])
+        revealed = []
+        original_reveal = download_page_module.reveal_file_in_folder
+        original_run_background = download_page_module.run_background
+        download_page_module.reveal_file_in_folder = lambda path: revealed.append(Path(path)) or True
+        download_page_module.run_background = lambda parent, fn, on_done=None, on_error=None: (
+            on_done(fn()) if on_done else fn()
+        )
+        try:
+            page = DownloadPage(FakeDownloadService(), EventBus())
+            page.refresh()
+            page.table.selectRow(0)
+
+            page.open_selected_task_file_location()
+
+            self.assertEqual(revealed, [download_page_module.VIDEO_DIR / "downloaded.mp4"])
+            page.close()
+            app.processEvents()
+        finally:
+            download_page_module.reveal_file_in_folder = original_reveal
+            download_page_module.run_background = original_run_background
+
+    def test_publish_page_reveals_selected_material_location(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            from pathlib import Path
+            from PySide6.QtWidgets import QApplication
+            from sau_desktop._shared import EventBus
+            from sau_desktop.pages.publish_page import PublishPage
+            import sau_desktop.pages.publish_page as publish_page_module
+        except ImportError as exc:
+            self.skipTest(f"PySide6 is not installed: {exc}")
+
+        class FakeMaterialService:
+            def list_materials(self):
+                return [{"filename": "demo.mp4", "source_type": "youtube", "file_path": "stored-demo.mp4"}]
+
+            def resolve_material_path(self, relative_path):
+                return Path("D:/videos") / relative_path
+
+        class FakeAccountService:
+            def list_accounts(self):
+                return []
+
+        class FakePublishService:
+            def get_topic_presets(self):
+                return {}
+
+            def get_last_selection(self):
+                return {}
+
+            def save_last_selection(self, selection):
+                pass
+
+        app = QApplication.instance() or QApplication([])
+        revealed = []
+        original_reveal = publish_page_module.reveal_file_in_folder
+        publish_page_module.reveal_file_in_folder = lambda path: revealed.append(Path(path)) or True
+        try:
+            page = PublishPage(FakeMaterialService(), FakeAccountService(), FakePublishService(), EventBus())
+            page.refresh()
+            page.materials.selectRow(0)
+
+            page.open_selected_material_location()
+
+            self.assertEqual(revealed, [Path("D:/videos/stored-demo.mp4")])
+            page.close()
+            app.processEvents()
+        finally:
+            publish_page_module.reveal_file_in_folder = original_reveal
+
+    def test_video_context_menus_are_consistent_across_pages(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            from pathlib import Path
+            from PySide6.QtCore import QPoint
+            from PySide6.QtWidgets import QApplication
+            from sau_desktop._shared import EventBus
+            from sau_desktop.pages.dashboard_page import DashboardPage
+            from sau_desktop.pages.download_page import DownloadPage
+            from sau_desktop.pages.material_page import MaterialPage
+            from sau_desktop.pages.publish_page import PublishPage
+            import sau_desktop.pages.dashboard_page as dashboard_page_module
+            import sau_desktop.pages.download_page as download_page_module
+            import sau_desktop.pages.material_page as material_page_module
+            import sau_desktop.pages.publish_page as publish_page_module
+        except ImportError as exc:
+            self.skipTest(f"PySide6 is not installed: {exc}")
+
+        class FakeMenu:
+            labels_by_parent = []
+
+            def __init__(self, parent=None):
+                self.labels = []
+                FakeMenu.labels_by_parent.append(self.labels)
+
+            def addAction(self, label):
+                self.labels.append(label)
+                return label
+
+            def exec(self, _position):
+                return None
+
+        class FakeMaterialService:
+            def list_materials(self):
+                return [{"id": 1, "filename": "demo.mp4", "source_type": "youtube", "file_path": "stored-demo.mp4"}]
+
+            def resolve_material_path(self, relative_path):
+                return Path("D:/videos") / relative_path
+
+            def delete_material(self, material_id):
+                return {"id": material_id}
+
+        class FakeAccountService:
+            def list_accounts(self):
+                return []
+
+        class FakeDownloadService:
+            def list_youtube_tasks(self):
+                return [
+                    {
+                        "taskId": "task-1",
+                        "createdAt": "2026-04-26 12:00:00",
+                        "progressPercent": 100,
+                        "videoTitleZh": "demo",
+                        "filePath": "downloaded.mp4",
+                    }
+                ]
+
+            def get_youtube_task(self, task_id):
+                return self.list_youtube_tasks()[0]
+
+        class FakePublishService:
+            def get_topic_presets(self):
+                return {}
+
+            def get_last_selection(self):
+                return {}
+
+            def save_last_selection(self, selection):
+                pass
+
+        app = QApplication.instance() or QApplication([])
+        original_menus = {
+            dashboard_page_module: dashboard_page_module.QMenu,
+            download_page_module: download_page_module.QMenu,
+            material_page_module: material_page_module.QMenu,
+            publish_page_module: publish_page_module.QMenu,
+        }
+        original_run_background = download_page_module.run_background
+        for module in original_menus:
+            module.QMenu = FakeMenu
+        download_page_module.run_background = lambda parent, fn, on_done=None, on_error=None: (
+            on_done(fn()) if on_done else fn()
+        )
+        try:
+            material_service = FakeMaterialService()
+            event_bus = EventBus()
+            dashboard = DashboardPage(FakeAccountService(), material_service, event_bus)
+            material = MaterialPage(material_service, event_bus)
+            download = DownloadPage(FakeDownloadService(), event_bus)
+            publish = PublishPage(material_service, FakeAccountService(), FakePublishService(), event_bus)
+
+            pages_and_tables = [
+                (dashboard, dashboard.recent_table, dashboard.show_context_menu),
+                (material, material.table, material.show_context_menu),
+                (download, download.table, download.show_context_menu),
+                (publish, publish.materials, publish.show_material_context_menu),
+            ]
+            for page, table, show_menu in pages_and_tables:
+                page.refresh()
+                table.selectRow(0)
+                show_menu(QPoint(1, table.rowViewportPosition(0) + 1))
+
+            self.assertEqual(
+                FakeMenu.labels_by_parent,
+                [["打开预览", "打开所在文件夹", "删除"]] * 4,
+            )
+            for page, _, _ in pages_and_tables:
+                page.close()
+            app.processEvents()
+        finally:
+            for module, original_menu in original_menus.items():
+                module.QMenu = original_menu
+            download_page_module.run_background = original_run_background
+
     def test_account_login_dialog_starts_login_and_handles_success(self):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         try:

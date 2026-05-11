@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shutil
 import sqlite3
 import threading
@@ -55,6 +56,7 @@ SYSTEM_COOKIE_DIR = COOKIE_DIR / "system"
 ProgressCallback = Callable[[dict], None]
 
 _logger = logging.getLogger("sau.services")
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 PLATFORM_CHOICES = [(1, "小红书"), (2, "视频号"), (3, "抖音"), (4, "快手")]
 DEFAULT_PUBLISH_TOPIC_PRESETS = {
@@ -249,6 +251,25 @@ def delete_material_record(conn, file_id: int):
 
 def _now() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def strip_terminal_controls(value) -> str:
+    return ANSI_ESCAPE_RE.sub("", str(value or "")).strip()
+
+
+def coerce_progress_number(value) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = strip_terminal_controls(value).replace("%", "").strip()
+    if not text:
+        return None
+    match = re.search(r"[-+]?\d+(?:\.\d+)?", text)
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
 
 
 def get_system_setting(setting_key: str, default_value: str = "") -> str:
@@ -1063,9 +1084,9 @@ class DownloadService:
     def _format_download_progress(self, status):
         if status.get("status") == "downloading":
             parts = [
-                (status.get("_percent_str") or "").strip(),
-                (status.get("_speed_str") or "").strip(),
-                f"ETA {(status.get('_eta_str') or '').strip()}" if status.get("_eta_str") else "",
+                strip_terminal_controls(status.get("_percent_str")),
+                strip_terminal_controls(status.get("_speed_str")),
+                f"ETA {strip_terminal_controls(status.get('_eta_str'))}" if status.get("_eta_str") else "",
             ]
             return " | ".join(part for part in parts if part) or "正在下载"
         if status.get("status") == "finished":
@@ -1073,20 +1094,24 @@ class DownloadService:
         return "等待下载"
 
     def _extract_progress_fields(self, status):
-        percent_str = (status.get("_percent_str") or "").replace("%", "").strip()
-        progress_percent = None
-        if percent_str:
-            try:
-                progress_percent = round(float(percent_str), 2)
-            except ValueError:
-                progress_percent = None
-        return {
-            "progress_percent": progress_percent,
+        progress_percent = coerce_progress_number(status.get("_percent_str"))
+        if progress_percent is None:
+            downloaded_bytes = status.get("downloaded_bytes")
+            total_bytes = status.get("total_bytes") or status.get("total_bytes_estimate")
+            if isinstance(downloaded_bytes, (int, float)) and isinstance(total_bytes, (int, float)) and total_bytes > 0:
+                progress_percent = downloaded_bytes / total_bytes * 100
+        if progress_percent is None and status.get("status") == "finished":
+            progress_percent = 100
+
+        fields = {
             "downloaded_bytes": status.get("downloaded_bytes"),
             "total_bytes": status.get("total_bytes") or status.get("total_bytes_estimate"),
-            "speed_text": (status.get("_speed_str") or "").strip() or None,
-            "eta_text": (status.get("_eta_str") or "").strip() or None,
+            "speed_text": strip_terminal_controls(status.get("_speed_str")) or None,
+            "eta_text": strip_terminal_controls(status.get("_eta_str")) or None,
         }
+        if progress_percent is not None:
+            fields["progress_percent"] = max(0, min(100, round(progress_percent, 2)))
+        return fields
 
     def delete_youtube_task(self, task_id: str) -> dict:
         """Delete a download task and its associated files"""

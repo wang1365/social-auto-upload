@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QVBoxLayout,
     QWidget,
@@ -18,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from sau_core.services import MaterialService
 from sau_desktop._shared import (
-    DebouncedSearch, DenseTable, EventBus, make_button, page_header,
+    DebouncedSearch, DenseTable, EventBus, make_button, page_header, reveal_file_in_folder,
 )
 
 
@@ -37,6 +38,8 @@ class MaterialPage(QWidget):
             ["文件名", "来源", "标题", "大小", "时间"],
             [300, 80, 260, 75, 155],
         )
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.show_context_menu)
 
         # P2: 选中数量状态栏
         self.selection_label = QLabel("")
@@ -114,6 +117,33 @@ class MaterialPage(QWidget):
             return
         path = self.material_service.resolve_material_path(material["file_path"])
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def open_selected_material_location(self):
+        material = self.selected_material()
+        if not material:
+            return
+        path = self.material_service.resolve_material_path(material["file_path"])
+        if not reveal_file_in_folder(path):
+            QMessageBox.warning(self, "打开文件夹", "文件不存在，无法定位。")
+
+    def show_context_menu(self, position):
+        row = self.table.rowAt(position.y())
+        if row >= 0:
+            self.table.selectRow(row)
+        material = self.selected_material()
+        if not material:
+            return
+        menu = QMenu(self)
+        preview_action = menu.addAction("打开预览")
+        reveal_action = menu.addAction("打开所在文件夹")
+        delete_action = menu.addAction("删除")
+        action = menu.exec(self.table.viewport().mapToGlobal(position))
+        if action == preview_action:
+            self.open_preview()
+        elif action == reveal_action:
+            self.open_selected_material_location()
+        elif action == delete_action:
+            self.delete_material()
 
     def delete_material(self):
         checked = self.table.checked_rows()

@@ -5,6 +5,7 @@ from __future__ import annotations
 from urllib.parse import parse_qs, urlparse
 
 from PySide6.QtCore import Qt, QUrl, QTimer, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -24,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from sau_core.services import DownloadService, ServiceError, VIDEO_DIR
-from sau_desktop._shared import DenseTable, EventBus, make_button, page_header, run_background
+from sau_desktop._shared import DenseTable, EventBus, make_button, page_header, reveal_file_in_folder, run_background
 from sau_desktop.mpv_preview import LocalVideoPreview
 
 
@@ -167,13 +168,38 @@ class DownloadPage(QWidget):
         if not task:
             return
         menu = QMenu(self)
-        detail_action = menu.addAction("查看详情")
+        preview_action = menu.addAction("打开预览")
+        reveal_action = menu.addAction("打开所在文件夹")
         delete_action = menu.addAction("删除")
         action = menu.exec(self.table.viewport().mapToGlobal(position))
-        if action == detail_action:
-            self.open_selected_task_detail()
+        if action == preview_action:
+            self.open_selected_task_preview()
+        elif action == reveal_action:
+            self.open_selected_task_file_location()
         elif action == delete_action:
             self.delete_selected_task()
+
+    def selected_task_file_path(self):
+        task = self.selected_task()
+        if not task:
+            return None
+        relative_path = task.get("filePath") or task.get("processedFilePath")
+        if not relative_path:
+            return None
+        return VIDEO_DIR / relative_path
+
+    def open_selected_task_preview(self):
+        path = self.selected_task_file_path()
+        if not path:
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def open_selected_task_file_location(self):
+        path = self.selected_task_file_path()
+        if not path:
+            return
+        if not reveal_file_in_folder(path):
+            QMessageBox.warning(self, "打开文件夹", "文件不存在，无法定位。")
 
     def delete_selected_task(self):
         task = self.selected_task()

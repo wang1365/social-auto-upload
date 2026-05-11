@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot, QSize, QRect
+import sys
+from pathlib import Path
+
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot, QSize, QRect, QDir, QProcess
 from PySide6.QtGui import QIcon, QFont, QColor, QPalette
 from PySide6.QtWidgets import (
     QStyle,
@@ -28,6 +31,18 @@ from PySide6.QtWidgets import (
     QToolButton,
     QApplication,
 )
+
+
+def reveal_file_in_folder(path: str | Path) -> bool:
+    """Open the file manager and select the given file when the platform supports it."""
+    target = Path(path).resolve()
+    if not target.exists():
+        return False
+    if sys.platform.startswith("win"):
+        return QProcess.startDetached("explorer.exe", ["/select,", QDir.toNativeSeparators(str(target))])
+    if sys.platform == "darwin":
+        return QProcess.startDetached("open", ["-R", str(target)])
+    return QProcess.startDetached("xdg-open", [str(target.parent)])
 
 
 # ============================================================
