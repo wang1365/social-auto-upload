@@ -4,16 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "social-auto-upload"
-version = "0.1.0"
+version = "2.0.0"
 description = "Social media auto uploader"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
   "loguru==0.7.3",
-  "mpv==1.0.8",
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.34,<1",
+  "python-multipart>=0.0.20,<1",
   "opencv-python>=4.13.0.92",
   "patchright==1.58.2",
-  "PySide6>=6.7,<7",
+  "playwright==1.58.0",
   "qrcode==8.2",
   "requests==2.32.3",
   "segno>=1.6.6",
@@ -22,20 +24,24 @@ dependencies = [
 
 [project.scripts]
 sau = "sau_cli:main"
-sau-desktop = "sau_desktop.main:main"
+sau-web = "sau_web.launcher:main"
 
 [tool.uv]
 package = true
 
 [tool.setuptools]
-py-modules = ["cli_main", "conf", "sau_backend", "sau_cli"]
+py-modules = ["sau_backend", "sau_cli"]
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["sau_core*", "sau_desktop*", "uploader*", "utils*", "myUtils*"]
+include = ["sau_core*", "sau_web*", "uploader*", "utils*", "myUtils*"]
 
 [tool.setuptools.package-data]
 utils = ["stealth.min.js"]
+sau_web = ["static/*", "static/assets/*"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "httpx>=0.28,<1", "build>=1,<2"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

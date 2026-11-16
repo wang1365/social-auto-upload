@@ -1,47 +1,30 @@
-## Project Overview
+# 拾光分发 2.0
 
-`拾光分发` 1.0 is a local desktop application for uploading and managing social-media publishing workflows. The product UI is implemented with PySide6 and calls Python services directly.
+## Architecture
 
-The previous Vue frontend and Flask HTTP API are legacy architecture and are not part of the 1.0 primary path.
+- Product UI: Vue 3 + TypeScript + Element Plus in `sau_frontend/`.
+- Local HTTP API: FastAPI in `sau_web/`, `/api/v2`, loopback only.
+- Runtime: SQLite-backed task supervisor and isolated Python worker processes.
+- Business services: `sau_core/`; platform automation: `uploader/`.
+- CLI: `sau ...`; web: `sau-web` or `python -m sau_web.launcher`.
+- PySide6 desktop UI has been removed. Do not reintroduce Qt or mpv.
 
-## Core Components
+## Working rules
 
-**Desktop client**
+- Keep UI Chinese, concise, and oriented around material/account/publishing workflows.
+- Put validation, orchestration, and publishing receipts in Python, not page widgets.
+- Preserve SQLite schema, IDs, cookies and material paths; back up before migrations.
+- Never infer publishing success solely from an absence of exceptions. Submission without a positive receipt is unknown and must not auto-retry.
+- Guard active material/account references. Deleting task history must retain material files.
+- Session cookies protect media and SSE; mutations also require the local CSRF token.
+- Generate frontend API types with `python tools/export_web_api.py` and `npm --prefix sau_frontend run api:types`.
+- Read `docs/web-2.0.md` for build, tests, migration, and recovery.
+- Tests use isolated runtime directories and mocked platforms; do not publish real content during automated checks.
 
-- Package: `sau_desktop`
-- Entry point: `python -m sau_desktop.main` or `sau-desktop`
-- UI style: dense local-client layout with navigation, tables, toolbars, split panes, and compact forms.
+## Verification
 
-**Service layer**
-
-- Package: `sau_core`
-- Services: accounts, materials, downloads, processing, publishing, settings.
-- Data is stored in SQLite and local runtime folders.
-
-**Automation and CLI**
-
-- `uploader/`, `myUtils/`, and `utils/` contain platform-specific automation.
-- `sau_cli.py` remains available for command-line workflows.
-
-## Running
-
-```bash
-pip install -r requirements.txt
-playwright install chromium
-python db/createTable.py
-python -m sau_desktop.main
+```powershell
+uv run pytest -q
+npm.cmd --prefix sau_frontend test
+npm.cmd --prefix sau_frontend run build
 ```
-
-For editable installs:
-
-```bash
-pip install -e .
-sau-desktop
-```
-
-## Development Rules
-
-- Do not add a Flask or REST dependency for desktop UI integration.
-- Add business behavior to `sau_core` first, then connect UI widgets to service methods.
-- Keep tests focused on services and automation boundaries; avoid UI tests that require real browser login.
-- Keep the existing SQLite schema and runtime paths compatible by default.

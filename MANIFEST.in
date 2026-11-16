@@ -1,0 +1,4 @@
+recursive-include sau_web/static *
+include utils/stealth.min.js
+include conf.example.py
+exclude conf.py

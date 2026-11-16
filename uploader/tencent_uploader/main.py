@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
+from utils.network import launch_browser_direct
 from datetime import datetime
 
 from playwright.async_api import Playwright, async_playwright
 import os
 import asyncio
+from utils.publish_receipt import attempted, confirmed, stop_web_resubmission
 
 from conf import LOCAL_CHROME_PATH, LOCAL_CHROME_HEADLESS
 from utils.base_social_media import set_init_script
@@ -33,7 +35,7 @@ def format_str_for_short_title(origin_title: str) -> str:
 
 async def cookie_auth(account_file):
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=LOCAL_CHROME_HEADLESS)
+        browser = await launch_browser_direct(playwright.chromium, headless=LOCAL_CHROME_HEADLESS)
         context = await browser.new_context(storage_state=account_file)
         context = await set_init_script(context)
         # 创建一个新的页面
@@ -58,7 +60,7 @@ async def get_tencent_cookie(account_file):
             'headless': LOCAL_CHROME_HEADLESS,  # Set headless option here
         }
         # Make sure to run headed.
-        browser = await playwright.chromium.launch(**options)
+        browser = await launch_browser_direct(playwright.chromium, **options)
         # Setup context however you like.
         context = await browser.new_context()  # Pass any options
         # Pause the page, and start recording manually.
@@ -137,7 +139,7 @@ class TencentVideo(object):
 
     async def upload(self, playwright: Playwright) -> None:
         # 使用 Chromium (这里使用系统内浏览器，用chromium 会造成h264错误
-        browser = await playwright.chromium.launch(headless=self.headless, executable_path=self.local_executable_path)
+        browser = await launch_browser_direct(playwright.chromium, headless=self.headless, executable_path=self.local_executable_path)
         # 创建一个浏览器上下文，使用指定的 cookie 文件
         context = await browser.new_context(storage_state=f"{self.account_file}")
         context = await set_init_script(context)
@@ -199,9 +201,11 @@ class TencentVideo(object):
                     # 点击"发表"按钮
                     publish_button = page.locator('div.form-btns button:has-text("发表")')
                     if await publish_button.count():
+                        attempted(self)
                         await publish_button.click()
                     await page.wait_for_url("https://channels.weixin.qq.com/platform/post/list", timeout=5000)
                     tencent_logger.success("  [-]视频发布成功")
+                    confirmed(self)
                 break
             except Exception as e:
                 current_url = page.url
@@ -214,7 +218,9 @@ class TencentVideo(object):
                     # 检查是否在发布列表页面
                     if "https://channels.weixin.qq.com/platform/post/list" in current_url:
                         tencent_logger.success("  [-]视频发布成功")
+                        confirmed(self)
                         break
+                stop_web_resubmission(self)
                 tencent_logger.exception(f"  [-] Exception: {e}")
                 tencent_logger.info("  [-] 视频正在发布中...")
                 await asyncio.sleep(0.5)

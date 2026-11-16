@@ -1,13 +1,17 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from utils.network import launch_browser_direct
+
 import asyncio
+import base64
 import inspect
 import os
 from datetime import datetime
 from pathlib import Path
 
 from patchright.async_api import Page
+from patchright.async_api import Error as BrowserError
 from patchright.async_api import Playwright
 from patchright.async_api import async_playwright
 
@@ -20,6 +24,7 @@ from utils.login_qrcode import print_terminal_qrcode
 from utils.login_qrcode import remove_qrcode_file
 from utils.login_qrcode import save_data_url_image
 from utils.log import xiaohongshu_logger
+from utils.publish_receipt import attempted, confirmed, stop_web_resubmission
 
 XHS_LOGIN_URL = "https://creator.xiaohongshu.com/login"
 XHS_PUBLISH_VIDEO_URL = "https://creator.xiaohongshu.com/publish/publish?from=homepage&target=video"
@@ -76,15 +81,37 @@ async def _open_xhs_qrcode_panel(page: Page) -> None:
     await login_box.locator("div:has-text('扫一扫')").first.wait_for(state="visible", timeout=10000)
 
 
+async def _raise_xhs_login_restriction(page: Page) -> None:
+    if "/website-login/error" not in page.url:
+        return
+    text = await page.locator("body").inner_text(timeout=5000)
+    if "当前网络存在风险" in text or "300012" in text:
+        raise RuntimeError(
+            "小红书提示当前网络存在风险（300012），请切换可靠网络后重试，"
+            "或使用“打开浏览器登录”查看平台提示。"
+        )
+    raise RuntimeError("小红书登录受限，请使用“打开浏览器登录”查看平台提示后重试。")
+
+
 async def _find_xhs_qrcode_locator(page: Page):
-    await _open_xhs_qrcode_panel(page)
-
-    qrcode_img = page.locator('.login-box-container').get_by_text("APP扫一扫登录").filter(visible=True).locator("xpath=..//following-sibling::div//img").nth(0)
-
-    if await qrcode_img.count():
-        return qrcode_img
-
-    raise RuntimeError("未在扫一扫登录区域找到小红书二维码图片")
+    for attempt in range(3):
+        await _raise_xhs_login_restriction(page)
+        try:
+            await _open_xhs_qrcode_panel(page)
+            qrcode_img = (
+                page.locator('.login-box-container')
+                .get_by_text("APP扫一扫登录").filter(visible=True)
+                .locator("xpath=..//following-sibling::div//img").first
+            )
+            # The login document can redirect while its QR panel is mounting.
+            # A snapshot count both races that redirect and rejects delayed images.
+            await qrcode_img.wait_for(state="visible", timeout=30000)
+            return qrcode_img
+        except BrowserError as exc:
+            await _raise_xhs_login_restriction(page)
+            if "Execution context was destroyed" not in str(exc) or attempt == 2:
+                raise
+            await page.wait_for_load_state("domcontentloaded", timeout=10000)
 
 
 async def _extract_xhs_qrcode_src(page: Page) -> str:
@@ -104,13 +131,14 @@ async def _save_xhs_qrcode(
 ) -> dict:
     qrcode_src = await _extract_xhs_qrcode_src(page)
     qrcode_path = build_login_qrcode_path(account_file, suffix="xhs_login_qrcode")
-    qrcode_img = await _find_xhs_qrcode_locator(page)
 
     if qrcode_src.startswith("data:image/"):
         save_data_url_image(qrcode_src, qrcode_path)
     else:
+        qrcode_img = await _find_xhs_qrcode_locator(page)
         qrcode_path.parent.mkdir(parents=True, exist_ok=True)
         await qrcode_img.screenshot(path=str(qrcode_path))
+        qrcode_src = "data:image/png;base64," + base64.b64encode(qrcode_path.read_bytes()).decode()
 
     if previous_qrcode_path and previous_qrcode_path != qrcode_path:
         if remove_qrcode_file(previous_qrcode_path):
@@ -132,17 +160,19 @@ async def _save_xhs_qrcode(
 
 
 async def _is_xhs_login_completed(page: Page) -> bool:
+    await _raise_xhs_login_restriction(page)
     if page.url.startswith(XHS_LOGIN_URL):
         return False
 
     login_box = page.locator(XHS_LOGIN_BOX_SELECTOR).first
-    if not await login_box.count():
-        return True
-
     try:
+        if not await login_box.count():
+            return True
         return not await login_box.is_visible()
-    except Exception:
-        return True
+    except BrowserError as exc:
+        if "Execution context was destroyed" in str(exc):
+            return False
+        raise
 
 
 async def cookie_auth(account_file):
@@ -151,9 +181,9 @@ async def cookie_auth(account_file):
 
     async with async_playwright() as playwright:
         if LOCAL_CHROME_PATH:
-            browser = await playwright.chromium.launch(headless=True, executable_path=LOCAL_CHROME_PATH)
+            browser = await launch_browser_direct(playwright.chromium, headless=True, executable_path=LOCAL_CHROME_PATH)
         else:
-            browser = await playwright.chromium.launch(headless=True, channel="chrome")
+            browser = await launch_browser_direct(playwright.chromium, headless=True, channel="chrome")
         try:
             context = await browser.new_context(storage_state=account_file)
             context = await set_init_script(context)
@@ -220,7 +250,7 @@ async def xiaohongshu_cookie_gen(
     account_path.parent.mkdir(parents=True, exist_ok=True)
 
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=headless, channel="chrome")
+        browser = await launch_browser_direct(playwright.chromium, headless=headless, channel="chrome")
         context = await browser.new_context()
         context = await set_init_script(context)
         qrcode_path = None
@@ -540,16 +570,20 @@ class XiaoHongShuVideo(XiaoHongShuBaseUploader):
         while True:
             try:
                 if self.publish_strategy == XIAOHONGSHU_PUBLISH_STRATEGY_SCHEDULED:
+                    attempted(self)
                     await page.locator('button:has-text("定时发布")').click()
                 else:
+                    attempted(self)
                     await page.locator('button:has-text("发布")').click()
                 await page.wait_for_url(
                     "https://creator.xiaohongshu.com/publish/success?**",
                     timeout=3000
                 )
                 xiaohongshu_logger.success(_msg("🥳", "视频发布成功，小人开心收工"))
+                confirmed(self)
                 break
             except Exception:
+                stop_web_resubmission(self)
                 xiaohongshu_logger.info(_msg("🏃", "小人正在冲刺发布视频"))
                 if self.debug:
                     await page.screenshot(full_page=True)
@@ -559,7 +593,7 @@ class XiaoHongShuVideo(XiaoHongShuBaseUploader):
         xiaohongshu_logger.info(_msg("🧍", "小人先检查 cookie、视频文件、封面和发布时间"))
         await self.validate_upload_args()
         xiaohongshu_logger.info(_msg("🥳", "上传前检查通过"))
-        browser = await playwright.chromium.launch(headless=self.headless, channel="chrome")
+        browser = await launch_browser_direct(playwright.chromium, headless=self.headless, channel="chrome")
         context = await browser.new_context(
             permissions=["geolocation"],
             storage_state=self.account_file,
@@ -677,7 +711,7 @@ class XiaoHongShuNote(XiaoHongShuBaseUploader):
         xiaohongshu_logger.info(_msg("🧍", "小人先检查 cookie、图片和发布时间"))
         await self.validate_upload_args()
         xiaohongshu_logger.info(_msg("🥳", "图文上传前检查通过"))
-        browser = await playwright.chromium.launch(headless=self.headless, channel="chrome")
+        browser = await launch_browser_direct(playwright.chromium, headless=self.headless, channel="chrome")
         context = await browser.new_context(
             permissions=["geolocation"],
             storage_state=self.account_file,

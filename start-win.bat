@@ -1,24 +1,20 @@
 @echo off
-TITLE 拾光分发 1.0
+chcp 65001 >nul
 setlocal
-set "ROOT_DIR=%~dp0"
-set "VENV_PY=%ROOT_DIR%.venv\Scripts\python.exe"
-
-ECHO ==================================================
-ECHO  Starting 拾光分发 1.0 desktop client
-ECHO ==================================================
-ECHO.
-
-if not exist "%VENV_PY%" (
-  ECHO [ERROR] Missing virtual environment Python: %VENV_PY%
-  ECHO Please run: uv venv .venv ^&^& uv pip install -r requirements.txt ^&^& uv pip install -e .
-  goto :end
+title 拾光分发 2.0
+set "SAU_ROOT=%~dp0"
+set "SAU_PYTHON=%SAU_ROOT%.venv\Scripts\python.exe"
+if not exist "%SAU_PYTHON%" (
+  echo 未找到 Python 运行环境，请先按 docs\web-2.0.md 完成安装。
+  pause
+  exit /b 1
 )
-
-START "拾光分发 Desktop" /D "%ROOT_DIR%" cmd /k ""%VENV_PY%" -m sau_desktop.main"
-
-ECHO Desktop client launched.
-timeout /t 3 /nobreak > nul
-
-:end
+if not exist "%SAU_ROOT%sau_web\static\index.html" (
+  echo 请先构建 Web 界面：powershell -ExecutionPolicy Bypass -File tools\build_web.ps1
+  pause
+  exit /b 1
+)
+cd /d "%SAU_ROOT%"
+"%SAU_PYTHON%" -m sau_web.launcher
+if errorlevel 1 pause
 endlocal

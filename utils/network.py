@@ -3,6 +3,14 @@ import time
 from functools import wraps
 
 
+async def launch_browser_direct(chromium, **options):
+    """Domestic creator platforms must not inherit Windows or supplied proxies."""
+    options.pop("proxy", None)
+    args = [arg for arg in options.pop("args", [])
+            if not arg.startswith(("--proxy-", "--no-proxy-server"))]
+    return await chromium.launch(**options, args=[*args, "--no-proxy-server"])
+
+
 def async_retry(timeout=60, max_retries=None):
     def decorator(func):
         @wraps(func)

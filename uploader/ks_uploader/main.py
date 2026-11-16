@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from utils.network import launch_browser_direct
+
 import asyncio
 import inspect
 import os
@@ -21,6 +23,7 @@ from utils.login_qrcode import print_terminal_qrcode
 from utils.login_qrcode import remove_qrcode_file
 from utils.login_qrcode import save_data_url_image
 from utils.log import kuaishou_logger
+from utils.publish_receipt import attempted, confirmed, stop_web_resubmission
 
 KUAISHOU_UPLOAD_URL = "https://cp.kuaishou.com/article/publish/video"
 KUAISHOU_MANAGE_URL = "https://cp.kuaishou.com/article/manage/video?status=2&from=publish"
@@ -153,9 +156,9 @@ async def _is_ks_login_page_gone(page: Page) -> bool:
 async def cookie_auth(account_file):
     async with async_playwright() as playwright:
         if LOCAL_CHROME_PATH:
-            browser = await playwright.chromium.launch(headless=True, executable_path=LOCAL_CHROME_PATH)
+            browser = await launch_browser_direct(playwright.chromium, headless=True, executable_path=LOCAL_CHROME_PATH)
         else:
-            browser = await playwright.chromium.launch(headless=True, channel="chrome")
+            browser = await launch_browser_direct(playwright.chromium, headless=True, channel="chrome")
         try:
             context = await browser.new_context(storage_state=account_file)
             context = await set_init_script(context)
@@ -200,9 +203,9 @@ async def get_ks_cookie(
 
     async with async_playwright() as playwright:
         if LOCAL_CHROME_PATH:
-            browser = await playwright.chromium.launch(headless=headless, executable_path=LOCAL_CHROME_PATH)
+            browser = await launch_browser_direct(playwright.chromium, headless=headless, executable_path=LOCAL_CHROME_PATH)
         else:
-            browser = await playwright.chromium.launch(headless=headless, channel="chrome")
+            browser = await launch_browser_direct(playwright.chromium, headless=headless, channel="chrome")
         context = await browser.new_context()
         context = await set_init_script(context)
         qrcode_path = None
@@ -420,12 +423,12 @@ class KSVideo(KSBaseUploader):
         kuaishou_logger.info(_msg("🥳", "上传前检查通过"))
 
         if self.local_executable_path:
-            browser = await playwright.chromium.launch(
+            browser = await launch_browser_direct(playwright.chromium,
                 headless=self.headless,
                 executable_path=self.local_executable_path,
             )
         else:
-            browser = await playwright.chromium.launch(
+            browser = await launch_browser_direct(playwright.chromium,
                 headless=self.headless,
                 channel="chrome",
             )
@@ -505,6 +508,7 @@ class KSVideo(KSBaseUploader):
                 try:
                     publish_button = page.get_by_text("发布", exact=True)
                     if await publish_button.count() > 0:
+                        attempted(self)
                         await publish_button.click()
 
                     await asyncio.sleep(1)
@@ -514,8 +518,10 @@ class KSVideo(KSBaseUploader):
 
                     await page.wait_for_url(KUAISHOU_MANAGE_URL_PATTERN, timeout=5000)
                     kuaishou_logger.success(_msg("🥳", "视频发布成功，小人开心收工"))
+                    confirmed(self)
                     break
                 except Exception as exc:
+                    stop_web_resubmission(self)
                     kuaishou_logger.info(_msg("🏃", f"小人正在冲刺发布视频: {exc}"))
                     if self.debug:
                         await page.screenshot(full_page=True)
@@ -666,12 +672,12 @@ class KSNote(KSBaseUploader):
         kuaishou_logger.info(_msg("🥳", "图文上传前检查通过"))
 
         if self.local_executable_path:
-            browser = await playwright.chromium.launch(
+            browser = await launch_browser_direct(playwright.chromium,
                 headless=self.headless,
                 executable_path=self.local_executable_path,
             )
         else:
-            browser = await playwright.chromium.launch(
+            browser = await launch_browser_direct(playwright.chromium,
                 headless=self.headless,
                 channel="chrome",
             )

@@ -5,4 +5,7 @@ cookies
 conf.py
 sau_frontend/dist
 sau_frontend/node_modules
-sau_frontend/package-lock.json
+runtime
+videoFile
+cookiesFile
+db/database.db*

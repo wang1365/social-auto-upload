@@ -9,6 +9,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -83,10 +84,15 @@ class RuntimePaths:
     system_cookie_dir: Path = SYSTEM_COOKIE_DIR
 
 
+@contextmanager
 def db_connection():
     conn = sqlite3.connect(DATABASE_PATH)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def ensure_runtime_schema() -> None:
@@ -665,8 +671,11 @@ class ProcessingService:
         source_path: str,
         source_filename: str,
         callback: ProgressCallback | None = None,
+        *,
+        background: bool = True,
+        config: dict | None = None,
     ) -> str:
-        config = self.get_settings()
+        config = normalize_video_processing_config(config) if config is not None else self.get_settings()
         task_id = uuid.uuid4().hex
         with self.lock:
             self.tasks[task_id] = {
@@ -686,7 +695,8 @@ class ProcessingService:
                 "created_at": _now(),
                 "updated_at": _now(),
             }
-        threading.Thread(target=self._process_task, args=(task_id, callback), daemon=True).start()
+        if background:
+            threading.Thread(target=self._process_task, args=(task_id, callback), daemon=True).start()
         return task_id
 
     def _process_task(self, task_id: str, callback: ProgressCallback | None) -> None:
@@ -782,6 +792,8 @@ class DownloadService:
         url: str,
         download_subtitles: bool = True,
         callback: ProgressCallback | None = None,
+        *,
+        background: bool = True,
     ) -> str:
         url = (url or "").strip()
         if not url:
@@ -794,11 +806,12 @@ class DownloadService:
         task_id = uuid.uuid4().hex
         with self.lock:
             self.tasks[task_id] = self._new_task(task_id, url, bool(download_subtitles))
-        threading.Thread(
-            target=self._process_youtube_download,
-            args=(task_id, url, bool(download_subtitles), callback),
-            daemon=True,
-        ).start()
+        if background:
+            threading.Thread(
+                target=self._process_youtube_download,
+                args=(task_id, url, bool(download_subtitles), callback),
+                daemon=True,
+            ).start()
         return task_id
 
     def list_youtube_tasks(self) -> list[dict]:
@@ -1196,6 +1209,3 @@ class PublishService:
     def publish_batch(self, payloads: Iterable[dict]) -> None:
         for payload in payloads:
             self.publish(payload)
-
-
-ensure_runtime_schema()

@@ -1,3 +1,4 @@
+from utils.network import launch_browser_direct
 import asyncio
 import sqlite3
 
@@ -36,7 +37,7 @@ async def douyin_cookie_gen(id,status_queue):
     async with async_playwright() as playwright:
         options = get_browser_options()
         # Make sure to run headed.
-        browser = await playwright.chromium.launch(**options)
+        browser = await launch_browser_direct(playwright.chromium, **options)
         # Setup context however you like.
         context = await browser.new_context()  # Pass any options
         context = await set_init_script(context)
@@ -106,7 +107,7 @@ async def get_tencent_cookie(id,status_queue):
             'headless': LOCAL_CHROME_HEADLESS,  # Set headless option here
         }
         # Make sure to run headed.
-        browser = await playwright.chromium.launch(**options)
+        browser = await launch_browser_direct(playwright.chromium, **options)
         # Setup context however you like.
         context = await browser.new_context()  # Pass any options
         # Pause the page, and start recording manually.
@@ -183,7 +184,7 @@ async def get_ks_cookie(id,status_queue):
             'headless': LOCAL_CHROME_HEADLESS,  # Set headless option here
         }
         # Make sure to run headed.
-        browser = await playwright.chromium.launch(**options)
+        browser = await launch_browser_direct(playwright.chromium, **options)
         # Setup context however you like.
         context = await browser.new_context()  # Pass any options
         context = await set_init_script(context)
@@ -259,7 +260,7 @@ async def xiaohongshu_cookie_gen(id,status_queue):
             'headless': LOCAL_CHROME_HEADLESS,  # Set headless option here
         }
         # Make sure to run headed.
-        browser = await playwright.chromium.launch(**options)
+        browser = await launch_browser_direct(playwright.chromium, **options)
         # Setup context however you like.
         context = await browser.new_context()  # Pass any options
         context = await set_init_script(context)

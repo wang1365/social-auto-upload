@@ -1,8 +1,11 @@
 import asyncio
+import base64
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
+
+from patchright.async_api import Error as BrowserError
 
 import uploader.xiaohongshu_uploader.main as xhs_main
 
@@ -10,6 +13,7 @@ import uploader.xiaohongshu_uploader.main as xhs_main
 class FakeLocator:
     def __init__(self, name, count=0, src=None, children=None):
         self.name = name
+        self.url = xhs_main.XHS_LOGIN_URL
         self._count = count
         self._src = src
         self._children = children or {}
@@ -89,6 +93,88 @@ class RecordingPage:
 
 
 class XiaohongshuUploaderTests(unittest.TestCase):
+    def qrcode_page(self, qrcode_locator):
+        scan_text = FakeLocator(
+            "scan-text", count=1,
+            children={"xpath=..//following-sibling::div//img": qrcode_locator},
+        )
+        login_box = FakeLocator(
+            "login-box", count=1,
+            children={
+                "div:has-text('扫一扫')": scan_text,
+                "text:APP扫一扫登录": scan_text,
+            },
+        )
+        page = FakeLocator("page", children={
+            "div[class*='login-box']": login_box,
+            ".login-box-container": login_box,
+        })
+        page.url = xhs_main.XHS_LOGIN_URL
+        page.wait_for_load_state = AsyncMock()
+        return page, scan_text
+
+    def test_qrcode_is_delivered_after_login_page_navigation(self):
+        image = b"test-qr-image"
+        src = "data:image/png;base64," + base64.b64encode(image).decode()
+        page, scan_text = self.qrcode_page(FakeLocator("qrcode", count=1, src=src))
+        scan_text.count = AsyncMock(side_effect=[
+            BrowserError("Locator.count: Execution context was destroyed, most likely because of a navigation."),
+            1,
+        ])
+        received = []
+        with tempfile.TemporaryDirectory() as tmp_dir, patch.object(
+            xhs_main, "decode_qrcode_from_path", return_value=None
+        ):
+            result = asyncio.run(xhs_main._save_xhs_qrcode(
+                page, str(Path(tmp_dir) / "account.json"), qrcode_callback=received.append
+            ))
+            self.assertEqual(Path(result["image_path"]).read_bytes(), image)
+            self.assertEqual(received[0]["image_data_url"], src)
+
+    def test_qrcode_waits_for_image_instead_of_failing_before_it_mounts(self):
+        src = "data:image/png;base64," + base64.b64encode(b"qr").decode()
+        page, _ = self.qrcode_page(FakeLocator("qrcode", count=0, src=src))
+        received = []
+        with tempfile.TemporaryDirectory() as tmp_dir, patch.object(
+            xhs_main, "decode_qrcode_from_path", return_value=None
+        ):
+            asyncio.run(xhs_main._save_xhs_qrcode(
+                page, str(Path(tmp_dir) / "account.json"), qrcode_callback=received.append
+            ))
+        self.assertEqual(received[0]["image_data_url"], src)
+
+    def test_remote_qrcode_image_is_delivered_as_local_image_data(self):
+        locator = FakeLocator("qrcode", count=1, src="https://example.invalid/qr.png")
+        async def screenshot(*, path):
+            Path(path).write_bytes(b"qr-image")
+        locator.screenshot = screenshot
+        page, _ = self.qrcode_page(locator)
+        received = []
+        with tempfile.TemporaryDirectory() as tmp_dir, patch.object(
+            xhs_main, "decode_qrcode_from_path", return_value=None
+        ):
+            asyncio.run(xhs_main._save_xhs_qrcode(
+                page, str(Path(tmp_dir) / "account.json"), qrcode_callback=received.append
+            ))
+        self.assertEqual(received[0]["image_data_url"], "data:image/png;base64,cXItaW1hZ2U=")
+
+    def test_platform_network_restriction_is_reported_instead_of_missing_qrcode(self):
+        page, _ = self.qrcode_page(FakeLocator("qrcode"))
+        page.url = "https://creator.xiaohongshu.com/website-login/error?code=300012"
+        body = FakeLocator("body")
+        body.inner_text = AsyncMock(return_value="安全限制\n当前网络存在风险，请切换可靠网络后重试\n300012")
+        page._children["body"] = body
+        with self.assertRaisesRegex(RuntimeError, "网络.*300012"):
+            asyncio.run(xhs_main._find_xhs_qrcode_locator(page))
+
+    def test_login_poll_keeps_waiting_when_navigation_destroys_context(self):
+        page, _ = self.qrcode_page(FakeLocator("qrcode"))
+        page.url = "https://creator.xiaohongshu.com/"
+        page._children[xhs_main.XHS_LOGIN_BOX_SELECTOR].count = AsyncMock(
+            side_effect=BrowserError("Execution context was destroyed, most likely because of a navigation.")
+        )
+        self.assertFalse(asyncio.run(xhs_main._is_xhs_login_completed(page)))
+
     def test_find_xhs_qrcode_locator_prefers_scan_sibling_inside_login_box(self):
         qrcode_locator = FakeLocator("qrcode", count=1, src="data:image/png;base64,abc")
         scan_text_locator = FakeLocator(

@@ -1,0 +1,221 @@
+"""Browser acceptance test against a real local server with isolated test data.
+
+No workers are started, so queued publish/login tasks cannot contact platforms.
+Screenshots are test artifacts under .cache/web-qa, never real account data.
+"""
+
+import socket
+import base64
+import json
+import subprocess
+import threading
+import time
+from pathlib import Path
+
+import uvicorn
+from playwright.sync_api import sync_playwright, expect
+
+from sau_core import services
+from sau_web.app import create_app
+from sau_web.runtime import configure
+from sau_web.store import Store
+from sau_web.worker import Worker
+
+
+def test_browser_workflow_and_layout(tmp_path, monkeypatch):
+    for key in ("DATABASE_PATH", "VIDEO_DIR", "COOKIE_DIR", "SYSTEM_COOKIE_DIR"):
+        monkeypatch.setattr(services, key, getattr(services, key))
+    configure(tmp_path)
+    store = Store(services.DATABASE_PATH)
+    store.migrate()
+    services.ensure_runtime_schema()
+    with store.connect() as conn:
+        for platform, name in [
+            (3, "拾光创作号"),
+            (1, "生活记录号"),
+            (4, "日常分享号"),
+            (2, "品牌视频号"),
+        ]:
+            conn.execute(
+                "INSERT INTO user_info(type,filePath,userName,status) VALUES(?,?,?,1)",
+                (platform, f"test-{platform}.json", name),
+            )
+    # The video is generated locally, without downloaded media or credentials.
+    source = tmp_path / "演示视频.mp4"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=0x354f77:s=640x360:d=1",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(source),
+        ],
+        capture_output=True,
+        check=True,
+        timeout=30,
+    )
+    imported = services.MaterialService().import_files(
+        [source], custom_filename="创作日常：把想法变成作品"
+    )
+    services.MaterialService().import_files(
+        [source], custom_filename="周末记录：生活中的小片刻"
+    )
+    preview_id = store.create(
+        "preview", "生成测试预览", {"transcode": True}, material_id=imported[0]["id"]
+    )
+    store.claim(preview_id)
+    Worker(tmp_path, preview_id).run()
+    assert store.get(preview_id)["status"] == "succeeded"
+    assert (tmp_path / "runtime" / "previews" / f"{imported[0]['id']}.mp4").is_file()
+    server = uvicorn.Server(
+        uvicorn.Config(
+            create_app(tmp_path, start_workers=False),
+            host="127.0.0.1",
+            port=0,
+            log_level="error",
+        )
+    )
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    thread = threading.Thread(
+        target=server.run, kwargs={"sockets": [sock]}, daemon=True
+    )
+    thread.start()
+    deadline = time.monotonic() + 15
+    while not server.started and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert server.started
+    output = Path(__file__).resolve().parents[1] / ".cache" / "web-qa"
+    output.mkdir(parents=True, exist_ok=True)
+    errors = []
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(channel="chrome", headless=True)
+            context = browser.new_context(
+                viewport={"width": 1440, "height": 900}, locale="zh-CN"
+            )
+            page = context.new_page()
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(f"http://127.0.0.1:{port}")
+            expect(page.locator(".stat-card").first).to_contain_text("2")
+            page.screenshot(path=str(output / "dashboard-1440.png"), full_page=True)
+            for path, heading in [
+                ("/materials", "素材库"),
+                ("/accounts", "连接您的创作账号"),
+                ("/downloads", "下载中心"),
+                ("/settings", "按您的习惯工作"),
+            ]:
+                page.goto(f"http://127.0.0.1:{port}{path}")
+                expect(
+                    page.get_by_role("heading", name=heading, exact=True)
+                ).to_be_visible()
+                assert page.evaluate(
+                    "document.documentElement.scrollWidth <= window.innerWidth"
+                ), path
+            page.goto(f"http://127.0.0.1:{port}/publish")
+            expect(
+                page.get_by_role("button", name="开始发布", exact=True)
+            ).to_be_disabled()
+            page.get_by_role("button", name="选择素材", exact=True).click()
+            dialog = page.get_by_role("dialog", name="选择视频素材")
+            expect(dialog.locator(".el-table__body tr")).to_have_count(2)
+            dialog.locator(".el-table__header .el-checkbox").click()
+            dialog.get_by_role("button", name="确定选择").click()
+            expect(page.locator(".selected-material")).to_have_count(2)
+            expect(
+                page.locator(".account-option-name strong").filter(
+                    has_text="拾光创作号"
+                )
+            ).to_be_visible()
+            page.locator(".account-option").filter(has_text="拾光创作号").locator(
+                ".el-checkbox"
+            ).click()
+            page.locator(".account-option").filter(has_text="生活记录号").locator(
+                ".el-checkbox"
+            ).click()
+            page.get_by_placeholder("为这条视频写一个标题").fill("第一条：我的创作日常")
+            page.locator(".selected-material").nth(1).click()
+            page.get_by_placeholder("为这条视频写一个标题").fill("第二条：周末生活记录")
+            page.get_by_role("button", name="批量填充", exact=True).click()
+            bulk = page.get_by_role("dialog", name="批量填充文案")
+            bulk.get_by_placeholder("留空将清空已有正文").fill(
+                "记录值得分享的每一个瞬间。"
+            )
+            bulk.get_by_placeholder("多个话题用中文或英文逗号分隔").fill(
+                "生活记录，内容创作"
+            )
+            bulk.get_by_role("button", name="应用到 2 条素材").click()
+            expect(page.locator(".publish-footer")).to_contain_text("4 条发布任务")
+            page.reload()
+            expect(page.locator(".selected-material")).to_have_count(2)
+            expect(
+                page.get_by_role("button", name="开始发布", exact=True)
+            ).to_be_enabled()
+            page.locator(".preview-stage video").evaluate(
+                "video => video.play().then(() => video.pause())"
+            )
+            for width, height in [(1440, 900), (1280, 720), (1024, 768)]:
+                page.set_viewport_size({"width": width, "height": height})
+                assert page.evaluate(
+                    "document.documentElement.scrollWidth <= window.innerWidth"
+                ), width
+                expect(
+                    page.get_by_role("button", name="开始发布", exact=True)
+                ).to_be_in_viewport()
+                page.screenshot(
+                    path=str(output / f"publish-{width}.png"), full_page=True
+                )
+            page.set_viewport_size({"width": 1440, "height": 900})
+            page.get_by_role("button", name="开始发布", exact=True).click()
+            page.get_by_role("button", name="确定", exact=True).click()
+            expect(page.locator(".task-table .el-table__body tr")).to_have_count(4)
+            assert len(store.list(kind="publish")) == 4
+            assert {t["payload"]["title"] for t in store.list(kind="publish")} == {
+                "第一条：我的创作日常",
+                "第二条：周末生活记录",
+            }
+            page.reload()
+            page.get_by_role("button", name="发布记录").click()
+            expect(page.locator(".task-table .el-table__body tr")).to_have_count(4)
+            page.get_by_role("button", name="详情", exact=True).first.click()
+            expect(page.get_by_text("任务详情", exact=True)).to_be_visible()
+            expect(page.get_by_role("button", name="取消等待")).to_be_visible()
+            page.keyboard.press("Escape")
+            # Render the real browser screen fixture inside the workspace. All
+            # browsing endpoints are intercepted; no platform is contacted.
+            frame = base64.b64encode(page.screenshot()).decode()
+            browser_state = {"active": True, "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "title": "YouTube 测试视频", "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "image": "data:image/png;base64," + frame, "width":1280,"height":800,"message":""}
+            page.route("**/api/v2/youtube/browser**", lambda route: route.fulfill(content_type="application/json", body=json.dumps(browser_state)))
+            page.goto(f"http://127.0.0.1:{port}/youtube")
+            expect(page.get_by_role("heading", name="YouTube 浏览", exact=True)).to_be_visible()
+            expect(page.get_by_alt_text("YouTube 浏览器网页")).to_be_visible()
+            page.get_by_role("button", name="下载并发布", exact=True).click()
+            publish_dialog = page.get_by_role("dialog", name="下载并发布到多个平台")
+            expect(publish_dialog.get_by_role("button", name="确认下载并发布")).to_be_disabled()
+            publish_dialog.locator(".el-checkbox").nth(0).click()
+            publish_dialog.locator(".el-checkbox").nth(1).click()
+            publish_dialog.get_by_role("button", name="确认下载并发布").click()
+            expect(page.get_by_text("任务详情", exact=True)).to_be_visible()
+            downloads = store.list(kind="download")
+            assert len(downloads) == 1
+            assert len(downloads[0]["payload"]["publish_jobs"]) == 2
+            assert len(store.list(kind="publish")) == 4  # Download has not completed.
+            page.keyboard.press("Escape")
+            for width in (1440, 1024):
+                page.set_viewport_size({"width":width,"height":900})
+                assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+                page.screenshot(path=str(output / f"youtube-{width}.png"), full_page=True)
+            context.close()
+            browser.close()
+            assert not errors, errors
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+        sock.close()
