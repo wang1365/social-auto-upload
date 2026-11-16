@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import type { Task } from "../api";
-import { api, post } from "../api";
+import { api } from "../api";
 import {
   act,
   confirm,
@@ -14,6 +14,8 @@ import {
   retryable,
   statusLabels,
   platformNames,
+  cancelTask,
+  stoppingTasks,
 } from "../state";
 const props = defineProps<{ tasks: Task[]; compact?: boolean }>();
 const filter = ref("all");
@@ -41,10 +43,7 @@ async function remove(task: Task) {
     });
 }
 async function cancel(task: Task) {
-  await act(async () => {
-    await post(`/tasks/${task.id}/cancel`);
-    await refresh();
-  });
+  await cancelTask(task);
 }
 </script>
 
@@ -122,6 +121,13 @@ async function cancel(task: Task) {
             link
             @click="cancel(row)"
             >取消</el-button
+          ><el-button
+            v-if="!compact && row.status === 'running'"
+            link
+            type="danger"
+            :loading="stoppingTasks.has(row.id)"
+            @click="cancel(row)"
+            >终止</el-button
           ><el-button
             v-if="!compact && !isActive(row)"
             link

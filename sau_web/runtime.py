@@ -7,7 +7,7 @@ import threading
 import time
 from pathlib import Path
 
-from sau_web.store import Store
+from sau_web.store import Conflict, Store
 
 
 def configure(home: Path):
@@ -31,6 +31,7 @@ class Runtime:
         self.processes: dict[str, tuple[subprocess.Popen, dict, float]] = {}
         self.thread = None
         self.lock_file = None
+        self.process_lock = threading.RLock()
 
     def start(self):
         lock_path = self.home / "runtime" / "web.lock"
@@ -67,6 +68,10 @@ class Runtime:
                 logging.getLogger(__name__).exception("任务调度失败")
 
     def tick(self):
+        with self.process_lock:
+            self._tick()
+
+    def _tick(self):
         for task_id, (process, task, started) in list(self.processes.items()):
             timed_out = time.monotonic() - started > (
                 2100 if task["kind"] == "publish" else 7200
@@ -146,6 +151,27 @@ class Runtime:
             if task["account_id"]:
                 accounts.add(task["account_id"])
 
+    def cancel(self, task_id):
+        with self.process_lock:
+            task = self.store.get(task_id)
+            if task["status"] == "queued":
+                self.store.cancel(task_id)
+                return
+            if task["status"] != "running":
+                raise Conflict("只能取消等待中的任务或终止运行中的任务")
+            entry = self.processes.get(task_id)
+            if not entry:
+                raise Conflict("执行进程状态尚未同步，请稍后重试")
+            process = entry[0]
+            try:
+                self._stop_process(process)
+                if process.poll() is None:
+                    raise RuntimeError()
+            except Exception:
+                raise Conflict("执行进程尚未退出，任务仍在运行，请稍后重试") from None
+            self.store.finish_stop(task_id)
+            del self.processes[task_id]
+
     @staticmethod
     def _stop_process(process):
         if os.name == "nt":
@@ -165,13 +191,15 @@ class Runtime:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
+            process.wait(timeout=5)
 
     def stop(self):
         self.stopping.set()
         if self.thread:
             self.thread.join(timeout=5)
-        for process, _, _ in self.processes.values():
-            self._stop_process(process)
-        self.store.recover()
+        with self.process_lock:
+            for process, _, _ in self.processes.values():
+                self._stop_process(process)
+            self.store.recover()
         if self.lock_file:
             self.lock_file.close()

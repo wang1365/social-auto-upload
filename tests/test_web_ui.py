@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import uvicorn
 from playwright.sync_api import sync_playwright, expect
@@ -188,6 +189,26 @@ def test_browser_workflow_and_layout(tmp_path, monkeypatch):
             expect(page.get_by_text("任务详情", exact=True)).to_be_visible()
             expect(page.get_by_role("button", name="取消等待")).to_be_visible()
             page.keyboard.press("Escape")
+            # Exercise the running-task stop UI through the real API, with a
+            # simulated worker so no publishing process contacts a platform.
+            stopping = store.list(kind="publish")[0]
+            store.claim(stopping['id'])
+            store.update(stopping['id'], phase='测试手动终止')
+            runtime = server.config.app.state.runtime
+            process = Mock()
+            runtime.processes[stopping['id']] = (process, stopping, time.monotonic())
+            expect(page.get_by_text('测试手动终止', exact=True)).to_be_visible()
+            row = page.locator('.el-table__body tr').filter(has_text='测试手动终止')
+            expect(row.get_by_role('button',name='终止',exact=True)).to_be_visible()
+            row.get_by_role('button',name='详情',exact=True).click()
+            with patch.object(runtime, '_stop_process') as stopper:
+                page.get_by_role('button',name='终止任务',exact=True).click()
+                page.get_by_role('button',name='确定',exact=True).click()
+                expect(page.get_by_role('dialog', name='任务详情').get_by_text('已手动终止', exact=True)).to_be_visible()
+                stopper.assert_called_once_with(process)
+            assert store.get(stopping['id'])['status'] == 'cancelled'
+            expect(page.get_by_role('button',name='终止任务',exact=True)).to_have_count(0)
+            page.keyboard.press('Escape')
             # Render the real browser screen fixture inside the workspace. All
             # browsing endpoints are intercepted; no platform is contacted.
             frame = base64.b64encode(page.screenshot()).decode()

@@ -688,7 +688,7 @@ def create_app(home: Path | None = None, *, start_workers=True):
 
     @app.post(API + "/tasks/{task_id}/cancel", status_code=204)
     def cancel(task_id: str):
-        store.cancel(task_id)
+        runtime.cancel(task_id)
         return Response(status_code=204)
 
     @app.delete(API + "/tasks/{task_id}", status_code=204)

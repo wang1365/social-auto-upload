@@ -5,12 +5,14 @@ from datetime import datetime
 import asyncio
 import inspect
 import os
+import time
 from pathlib import Path
 
 from patchright.async_api import Page
 from patchright.async_api import Playwright
 from patchright.async_api import async_playwright
 from patchright.async_api import TimeoutError as BrowserTimeoutError
+from patchright.async_api import Error as BrowserError
 
 from conf import DEBUG_MODE, LOCAL_CHROME_HEADLESS, LOCAL_CHROME_PATH
 from uploader.base_video import BaseVideoUploader
@@ -26,6 +28,9 @@ from utils.publish_receipt import attempted, confirmed, stop_web_resubmission
 DOUYIN_PUBLISH_STRATEGY_IMMEDIATE = "immediate"
 DOUYIN_PUBLISH_STRATEGY_SCHEDULED = "scheduled"
 DOUYIN_AUTH_TIMEOUT_MS = 15000
+DOUYIN_UPLOAD_MAX_RETRIES = 2
+DOUYIN_UPLOAD_RETRY_DELAY = 2
+DOUYIN_UPLOAD_TIMEOUT_SECONDS = 300
 
 
 def _msg(emoji: str, text: str) -> str:
@@ -426,9 +431,75 @@ class DouYinVideo(DouYinBaseUploader):
         if self.thumbnail_portrait_path:
             self.thumbnail_portrait_path = str(self.validate_image_file(self.thumbnail_portrait_path))
 
-    async def handle_upload_error(self, page):
-        douyin_logger.warning(_msg("😵", "视频上传摔了一跤，小人马上重新上传"))
-        await page.locator('div.progress-div [class^="upload-btn-input"]').set_input_files(self.file_path)
+    async def _create_upload_context(self, browser):
+        # Douyin's local parser creates blob Workers. Its current response CSP
+        # blocks them in automated Chrome, leaving parsing at 0% until failure.
+        return await browser.new_context(
+            storage_state=self.account_file,
+            permissions=["geolocation"],
+            bypass_csp=True,
+        )
+
+    def _upload_phase(self, message):
+        callback = getattr(self, "on_upload_progress", None)
+        if callback:
+            callback(message)
+
+    async def _wait_for_upload(self, page, timeout=DOUYIN_UPLOAD_TIMEOUT_SECONDS):
+        deadline = time.monotonic() + timeout
+        last_log = 0
+        while time.monotonic() < deadline:
+            failure = page.get_by_text("上传失败", exact=False).filter(visible=True)
+            if await failure.count():
+                detail = (await failure.first.locator("..").inner_text())[:500]
+                raise RuntimeError("抖音视频上传失败：" + detail)
+            # Current pages use preview-button; older pages used long-card.
+            # A retry label in the failure panel is not an upload receipt.
+            current = page.locator('[class^="preview-button-"]:has(input[accept*="video"])').get_by_text("重新上传", exact=True).filter(visible=True)
+            legacy = page.locator('[class^="long-card"]').get_by_text("重新上传", exact=True).filter(visible=True)
+            if await current.count() or await legacy.count():
+                douyin_logger.success("抖音视频上传完成")
+                self._upload_phase("视频上传完成，正在准备发布")
+                return
+            if time.monotonic() - last_log > 15:
+                progress = page.locator("div.progress-div").filter(visible=True)
+                detail = (await progress.first.inner_text())[-250:] if await progress.count() else "等待解析或上传完成"
+                douyin_logger.info("抖音视频上传中：" + detail)
+                last_log = time.monotonic()
+            await asyncio.sleep(min(1, max(0, deadline - time.monotonic())))
+        raise RuntimeError(f"抖音视频上传等待超时（{timeout:g} 秒），未提交发布")
+
+    async def _upload_video_attempt(self, page):
+        await page.goto(
+            "https://creator.douyin.com/creator-micro/content/upload",
+            wait_until="domcontentloaded", timeout=30000,
+        )
+        upload = page.locator('input[type="file"][accept*="video"]').first
+        await upload.wait_for(state="attached", timeout=15000)
+        await upload.set_input_files(self.file_path)
+        await page.wait_for_url(
+            lambda url: "/creator-micro/content/post/video" in url or "/creator-micro/content/publish" in url,
+            wait_until="domcontentloaded", timeout=45000,
+        )
+        await self.fill_title_and_description(page, self.title, self.desc, self.tags)
+        await self._wait_for_upload(page)
+
+    async def _upload_video_with_retries(self, page):
+        for attempt in range(DOUYIN_UPLOAD_MAX_RETRIES + 1):
+            phase = f"正在上传视频（第 {attempt + 1}/{DOUYIN_UPLOAD_MAX_RETRIES + 1} 次）"
+            douyin_logger.info(phase)
+            self._upload_phase(phase)
+            try:
+                await self._upload_video_attempt(page)
+                return
+            except (RuntimeError, BrowserError) as exc:
+                detail = "抖音页面加载或上传等待超时" if isinstance(exc, BrowserTimeoutError) else str(exc)[:500]
+                if attempt == DOUYIN_UPLOAD_MAX_RETRIES:
+                    raise RuntimeError(f"抖音视频上传失败，已重试 {DOUYIN_UPLOAD_MAX_RETRIES} 次，停止重试。{detail}") from None
+                douyin_logger.warning(f"{detail}；准备第 {attempt + 1}/{DOUYIN_UPLOAD_MAX_RETRIES} 次重试")
+                # Restart the upload page and restore the draft fields rather
+                # than searching for an obsolete retry input indefinitely.
+                await asyncio.sleep(DOUYIN_UPLOAD_RETRY_DELAY)
 
     async def handle_auto_video_cover(self, page):
         if await page.get_by_text("请设置封面后再发布").first.is_visible():
@@ -486,100 +557,58 @@ class DouYinVideo(DouYinBaseUploader):
         douyin_logger.info(_msg("🥳", "上传前检查通过"))
 
         browser = await launch_browser_direct(playwright.chromium, headless=self.headless, channel="chrome")
-        context = await browser.new_context(
-            storage_state=f"{self.account_file}",
-            permissions=["geolocation"],
-        )
-        context = await set_init_script(context)
+        context = None
+        try:
+            context = await self._create_upload_context(browser)
+            context = await set_init_script(context)
+            page = await context.new_page()
+            await self._upload_video_with_retries(page)
 
-        page = await context.new_page()
-        await page.goto("https://creator.douyin.com/creator-micro/content/upload")
-        douyin_logger.info(_msg("🏃", f"小人开始搬运视频: {self.title}.mp4"))
-        douyin_logger.info(_msg("🧭", "小人正在赶往上传主页"))
-        await page.wait_for_url("https://creator.douyin.com/creator-micro/content/upload")
-        await page.locator("div[class^='container'] input").set_input_files(self.file_path)
+            if self.productLink and self.productTitle:
+                douyin_logger.info(_msg("🛒", "小人正在设置商品链接"))
+                await self.set_product_link(page, self.productLink, self.productTitle)
+                douyin_logger.info(_msg("🥳", "商品链接设置完成"))
 
-        while True:
-            try:
-                await page.wait_for_url(
-                    "https://creator.douyin.com/creator-micro/content/publish?enter_from=publish_page",
-                    timeout=3000,
-                )
-                douyin_logger.info(_msg("🥳", "已经进入 version_1 发布页面"))
-                break
-            except Exception:
+            await self.set_thumbnail(page)
+
+            third_part_element = '[class^="info"] > [class^="first-part"] div div.semi-switch'
+            if await page.locator(third_part_element).count():
+                if "semi-switch-checked" not in await page.eval_on_selector(third_part_element, "div => div.className"):
+                    await page.locator(third_part_element).locator("input.semi-switch-native-control").click()
+
+            if self.publish_strategy == DOUYIN_PUBLISH_STRATEGY_SCHEDULED and self.publish_date != 0:
+                await self.set_schedule_time_douyin(page, self.publish_date)
+
+            while True:
                 try:
+                    publish_button = page.get_by_role("button", name="发布", exact=True)
+                    if await publish_button.count():
+                        attempted(self)
+                        await publish_button.click()
                     await page.wait_for_url(
-                        "https://creator.douyin.com/creator-micro/content/post/video?enter_from=publish_page",
+                        "https://creator.douyin.com/creator-micro/content/manage**",
                         timeout=3000,
                     )
-                    douyin_logger.info(_msg("🥳", "已经进入 version_2 发布页面"))
+                    douyin_logger.success(_msg("🥳", "视频发布成功，小人开心收工"))
+                    confirmed(self)
                     break
                 except Exception:
-                    douyin_logger.debug(_msg("🧍", "还没进到视频发布页面，小人继续等一会"))
+                    stop_web_resubmission(self)
+                    await self.handle_auto_video_cover(page)
+                    douyin_logger.info(_msg("🏃", "小人正在冲刺发布视频"))
+                    if self.debug:
+                        await page.screenshot(full_page=True)
                     await asyncio.sleep(0.5)
 
-        await asyncio.sleep(1)
-        douyin_logger.info(_msg("✍️", "小人开始填标题、描述和话题"))
-        await self.fill_title_and_description(page, self.title, self.desc, self.tags)
-        douyin_logger.info(_msg("🏷️", f"小人一共贴了 {len(self.tags)} 个话题"))
-
-        while True:
+            await context.storage_state(path=self.account_file)
+            douyin_logger.success(_msg("🥳", "cookie 更新完毕"))
+            await asyncio.sleep(2)
+        finally:
             try:
-                number = await page.locator('[class^="long-card"] div:has-text("重新上传")').count()
-                if number > 0:
-                    douyin_logger.success(_msg("🥳", "视频已经传完啦"))
-                    break
-                douyin_logger.info(_msg("🏃", "小人正在努力上传视频"))
-                await asyncio.sleep(2)
-                if await page.locator('div.progress-div > div:has-text("上传失败")').count():
-                    douyin_logger.error(_msg("😵", "检测到上传失败，小人准备重试"))
-                    await self.handle_upload_error(page)
-            except Exception:
-                douyin_logger.debug(_msg("🧍", "小人还在等视频上传完成"))
-                await asyncio.sleep(2)
-
-        if self.productLink and self.productTitle:
-            douyin_logger.info(_msg("🛒", "小人正在设置商品链接"))
-            await self.set_product_link(page, self.productLink, self.productTitle)
-            douyin_logger.info(_msg("🥳", "商品链接设置完成"))
-
-        await self.set_thumbnail(page)
-
-        third_part_element = '[class^="info"] > [class^="first-part"] div div.semi-switch'
-        if await page.locator(third_part_element).count():
-            if "semi-switch-checked" not in await page.eval_on_selector(third_part_element, "div => div.className"):
-                await page.locator(third_part_element).locator("input.semi-switch-native-control").click()
-
-        if self.publish_strategy == DOUYIN_PUBLISH_STRATEGY_SCHEDULED and self.publish_date != 0:
-            await self.set_schedule_time_douyin(page, self.publish_date)
-
-        while True:
-            try:
-                publish_button = page.get_by_role("button", name="发布", exact=True)
-                if await publish_button.count():
-                    attempted(self)
-                    await publish_button.click()
-                await page.wait_for_url(
-                    "https://creator.douyin.com/creator-micro/content/manage**",
-                    timeout=3000,
-                )
-                douyin_logger.success(_msg("🥳", "视频发布成功，小人开心收工"))
-                confirmed(self)
-                break
-            except Exception:
-                stop_web_resubmission(self)
-                await self.handle_auto_video_cover(page)
-                douyin_logger.info(_msg("🏃", "小人正在冲刺发布视频"))
-                if self.debug:
-                    await page.screenshot(full_page=True)
-                await asyncio.sleep(0.5)
-
-        await context.storage_state(path=self.account_file)
-        douyin_logger.success(_msg("🥳", "cookie 更新完毕"))
-        await asyncio.sleep(2)
-        await context.close()
-        await browser.close()
+                if context:
+                    await context.close()
+            finally:
+                await browser.close()
 
     async def douyin_upload_video(self):
         async with async_playwright() as playwright:

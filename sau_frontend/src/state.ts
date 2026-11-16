@@ -130,6 +130,30 @@ export async function retry(task: Task) {
   });
 }
 
+export const stoppingTasks = reactive(new Set<string>());
+export async function cancelTask(task: Task) {
+  if (stoppingTasks.has(task.id)) return;
+  if (
+    task.status === "running" &&
+    !(await confirm(
+      task.kind === "publish"
+        ? "终止当前发布任务并停止上传？如果已提交到平台，仍需到平台核实结果。素材会保留。"
+        : "终止当前任务？已保存的素材会保留。",
+      "终止任务",
+    ))
+  )
+    return;
+  stoppingTasks.add(task.id);
+  try {
+    await act(async () => {
+      await post(`/tasks/${task.id}/cancel`);
+      await refresh();
+    });
+  } finally {
+    stoppingTasks.delete(task.id);
+  }
+}
+
 export async function accountLogin(account: Account, headed = false) {
   await act(async () => {
     const result = await post<{ id: string }>(`/accounts/${account.id}/login`, {

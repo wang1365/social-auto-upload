@@ -343,6 +343,31 @@ class Store:
                 raise Conflict("只能取消尚未执行的任务")
             self._event(conn, task_id, "task", {"id": task_id, "status": "cancelled"})
 
+    def finish_stop(self, task_id):
+        """Called only after the worker exits; its latest receipt wins the race."""
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = self.decode(conn.execute("SELECT * FROM web_tasks WHERE id=?", (task_id,)).fetchone())
+            if task["status"] != "running":
+                return
+            result = task["result"] if task["kind"] != "login" else {}
+            result = {**result, "stopped": True}
+            status, phase, error = "cancelled", "已手动终止", None
+            if task["kind"] == "publish":
+                if result.get("confirmed"):
+                    status, phase = "succeeded", "发布成功"
+                elif result.get("attempted"):
+                    status, phase = "unknown", "已终止，发布结果待核实"
+                    error = "终止前已尝试提交发布，请先到平台核实结果，避免重复发布"
+            conn.execute(
+                "UPDATE web_tasks SET status=?,phase=?,error=?,result=?,updated_at=? WHERE id=?",
+                (status, phase, error, json.dumps(result, ensure_ascii=False), now(), task_id),
+            )
+            self._event(conn, task_id, "log", {"message": phase})
+            self._event(conn, task_id, "task", {"id": task_id, "status": status})
+            if status in {"succeeded", "unknown"}:
+                self._mark_retry_result(conn, task_id, status)
+
     def retry_chain(self, task_id):
         with self.connect() as conn:
             rows = conn.execute(

@@ -200,6 +200,7 @@ class Worker:
         uploader.on_publish_attempt = lambda: self.update(
             phase="正在提交发布", result={"attempted": True}
         )
+        uploader.on_upload_progress = lambda message: self.update(phase=message)
         uploader.on_publish_confirmed = lambda: self.update(
             phase="平台已确认发布", result={"attempted": True, "confirmed": True}
         )

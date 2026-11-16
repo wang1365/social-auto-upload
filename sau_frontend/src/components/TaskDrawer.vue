@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
-import { api, post, type Task, type TaskEvent, type Material } from "../api";
+import { api, type Task, type TaskEvent, type Material } from "../api";
 import {
   act,
   accountLogin,
@@ -10,7 +10,8 @@ import {
   kindLabels,
   platformNames,
   previewMaterial,
-  refresh,
+  cancelTask,
+  stoppingTasks,
   retry,
   retryable,
   state,
@@ -82,12 +83,11 @@ async function showSubtitle(id: number) {
   });
 }
 async function cancel() {
-  if (task.value)
-    await act(async () => {
-      await post(`/tasks/${task.value!.id}/cancel`);
-      await refresh();
-      await load(task.value!.id, generation);
-    });
+  if (task.value) {
+    const id = task.value.id;
+    await cancelTask(task.value);
+    await act(() => load(id, generation));
+  }
 }
 </script>
 
@@ -172,6 +172,12 @@ async function cancel() {
           >重新尝试</el-button
         ><el-button v-if="task.status === 'queued'" @click="cancel"
           >取消等待</el-button
+        ><el-button
+          v-if="task.status === 'running'"
+          type="danger"
+          :loading="stoppingTasks.has(task.id)"
+          @click="cancel"
+          >终止任务</el-button
         ><el-button
           v-if="task.kind === 'login' && !isActive(task) && account"
           @click="accountLogin(account, true)"
