@@ -40,7 +40,10 @@ onUnmounted(() => disconnect());
 
 <template>
   <el-config-provider>
-    <div class="app-shell">
+    <div
+      class="app-shell"
+      :class="{ 'youtube-route': route.path === '/youtube' }"
+    >
       <aside class="sidebar">
         <router-link to="/" class="brand"
           ><span class="brand-mark"><i></i><i></i><i></i></span

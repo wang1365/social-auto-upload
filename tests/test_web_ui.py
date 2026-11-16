@@ -194,8 +194,8 @@ def test_browser_workflow_and_layout(tmp_path, monkeypatch):
             browser_state = {"active": True, "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "title": "YouTube 测试视频", "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "image": "data:image/png;base64," + frame, "width":1280,"height":800,"message":""}
             page.route("**/api/v2/youtube/browser**", lambda route: route.fulfill(content_type="application/json", body=json.dumps(browser_state)))
             page.goto(f"http://127.0.0.1:{port}/youtube")
-            expect(page.get_by_role("heading", name="YouTube 浏览", exact=True)).to_be_visible()
-            expect(page.get_by_alt_text("YouTube 浏览器网页")).to_be_visible()
+            expect(page.get_by_role("heading", name="YouTube 浏览", exact=True)).to_be_attached()
+            expect(page.get_by_label("YouTube 浏览器网页", exact=True)).to_be_visible()
             page.get_by_role("button", name="下载并发布", exact=True).click()
             publish_dialog = page.get_by_role("dialog", name="下载并发布到多个平台")
             expect(publish_dialog.get_by_role("button", name="确认下载并发布")).to_be_disabled()
@@ -218,4 +218,99 @@ def test_browser_workflow_and_layout(tmp_path, monkeypatch):
     finally:
         server.should_exit = True
         thread.join(timeout=10)
+        sock.close()
+
+
+def test_youtube_live_player_audio_layout_and_translation_settings(tmp_path, monkeypatch):
+    from tests.test_browser_media import SOURCE
+
+    for key in ("DATABASE_PATH", "VIDEO_DIR", "COOKIE_DIR", "SYSTEM_COOKIE_DIR"):
+        monkeypatch.setattr(services, key, getattr(services, key))
+    app = create_app(tmp_path, start_workers=False)
+    remote = app.state.youtube_browser
+
+    async def navigate(url):
+        await remote.page.route('**/*', lambda route: route.fulfill(content_type='text/html', body=SOURCE))
+        await remote.page.goto(url)
+    remote._navigate = navigate
+    server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=0, log_level='error'))
+    sock = socket.socket()
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+    thread = threading.Thread(target=server.run, kwargs={'sockets':[sock]}, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 15
+    while not server.started and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert server.started
+    output = Path(__file__).resolve().parents[1] / '.cache' / 'web-qa'
+    output.mkdir(parents=True, exist_ok=True)
+    errors = []
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(channel='chrome', headless=True)
+            page = browser.new_page(viewport={'width':1440,'height':900})
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            page.goto(f'http://127.0.0.1:{port}/youtube')
+            page.get_by_role('button', name='启动 YouTube 浏览器').click()
+            try:
+                page.wait_for_function("document.querySelector('.youtube-video')?.getVideoPlaybackQuality().totalVideoFrames > 20", timeout=30000)
+            except Exception:
+                print('PLAYER_STATE', page.locator('.youtube-workspace').inner_text(), errors)
+                page.screenshot(path=str(output/'youtube-player-failure.png'))
+                raise
+            video = page.locator('.youtube-video')
+            assert video.evaluate("v=>v.srcObject.getAudioTracks().length") == 1
+            # A real browser may enforce autoplay restrictions; explicit audio
+            # enable must resume playback and preserve the received audio signal.
+            if video.evaluate('v=>v.muted'):
+                page.locator('.youtube-audio-prompt').click()
+            assert video.evaluate('v=>!v.muted && !v.paused')
+            page.evaluate('''() => {
+                const audio=window.qaAudio=new AudioContext();
+                const analyser=audio.createAnalyser();
+                audio.createMediaStreamSource(document.querySelector('.youtube-video').srcObject).connect(analyser);
+                const samples=new Float32Array(analyser.fftSize);window.qaEnergy=0;
+                setInterval(()=>{analyser.getFloatTimeDomainData(samples);window.qaEnergy=Math.max(window.qaEnergy,...samples.map(Math.abs));},50);
+                audio.resume();
+            }''')
+            page.wait_for_function('qaEnergy > 0.01', timeout=10000)
+            for width, height in [(1440,900), (1280,720), (1024,768)]:
+                page.set_viewport_size({'width':width,'height':height})
+                expect(page.get_by_role('button',name='下载并发布',exact=True)).to_be_in_viewport()
+                page.wait_for_function('''() => {
+                    const box=document.querySelector('.youtube-surface').getBoundingClientRect();
+                    return box.height > innerHeight * .75 && box.bottom < innerHeight;
+                }''')
+                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                page.screenshot(path=str(output/f'youtube-live-{width}.png'))
+            page.get_by_role('button',name='沉浸',exact=True).click()
+            expect(page.locator('.youtube-workspace')).to_have_class('panel youtube-workspace immersive')
+            assert page.locator('.youtube-workspace').bounding_box()['x'] == 0
+            page.keyboard.press('Escape')
+            expect(page.get_by_role('button',name='沉浸',exact=True)).to_be_visible()
+            page.get_by_role('button',name='全屏',exact=True).click()
+            page.wait_for_function('Boolean(document.fullscreenElement)')
+            page.evaluate('document.exitFullscreen()')
+            page.get_by_role('button',name='关闭浏览',exact=True).click()
+            expect(page.get_by_role('button',name='启动 YouTube 浏览器')).to_be_visible()
+            page.goto(f'http://127.0.0.1:{port}/settings')
+            page.get_by_role('button',name='大模型与翻译',exact=True).click()
+            switch = page.get_by_role('switch')
+            expect(switch).to_be_checked()
+            page.get_by_label('API 地址',exact=True).fill('http://127.0.0.1:11434/v1')
+            page.get_by_label('模型名称',exact=True).fill('test-local-model')
+            page.locator('.el-switch').click()
+            page.get_by_role('button',name='保存设置',exact=True).click()
+            expect(page.get_by_text('设置已保存',exact=True)).to_be_visible()
+            page.reload()
+            page.get_by_role('button',name='大模型与翻译',exact=True).click()
+            expect(page.get_by_label('模型名称',exact=True)).to_have_value('test-local-model')
+            expect(page.get_by_role('switch')).not_to_be_checked()
+            page.screenshot(path=str(output/'translation-settings.png'), full_page=True)
+            assert not errors, errors
+            browser.close()
+    finally:
+        server.should_exit = True
+        thread.join(timeout=15)
         sock.close()

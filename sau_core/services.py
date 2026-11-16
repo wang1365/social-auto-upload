@@ -30,7 +30,8 @@ from myUtils.postVideo import (
     post_video_tencent,
     post_video_xhs,
 )
-from myUtils.translation import translate_subtitle_file_to_zh, translate_title_to_zh
+from myUtils.translation import translate_subtitle_file_to_zh
+from sau_core.title_translation import configuration, save_configuration, translate_title_to_zh
 from myUtils.youtube_downloader import (
     classify_ytdlp_error,
     download_video,
@@ -448,6 +449,7 @@ class SettingsService:
             "youtubeCookieConfigured": bool(youtube_cookie_file),
             "videoProcessing": get_video_processing_settings(),
             "publishTopicPresets": get_publish_topic_presets(),
+            **configuration(public=True),
         }
 
     def save_settings(
@@ -455,6 +457,8 @@ class SettingsService:
         download_proxy: str = "",
         video_processing: dict | None = None,
         publish_topic_presets: dict[str, list[str]] | None = None,
+        llm: dict | None = None,
+        translation: dict | None = None,
     ) -> dict:
         download_proxy = (download_proxy or "").strip()
         if download_proxy and not is_valid_proxy_url(download_proxy):
@@ -462,6 +466,7 @@ class SettingsService:
                 "downloadProxy must be a valid http/https/socks5 proxy URL",
                 "invalid_proxy",
             )
+        save_configuration(llm, translation)
         set_system_setting("download_proxy", download_proxy)
         if video_processing is not None:
             save_video_processing_settings(video_processing)

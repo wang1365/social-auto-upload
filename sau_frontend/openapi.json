@@ -871,6 +871,18 @@
       "get": {
         "summary": "Youtube State",
         "operationId": "youtube_state_api_v2_youtube_browser_get",
+        "parameters": [
+          {
+            "name": "snapshot",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Snapshot"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -878,6 +890,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BrowserState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -890,6 +912,74 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          }
+        }
+      }
+    },
+    "/api/v2/youtube/browser/media": {
+      "post": {
+        "summary": "Youtube Media",
+        "operationId": "youtube_media_api_v2_youtube_browser_media_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediaOffer"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/youtube/browser/media/{peer_id}": {
+      "delete": {
+        "summary": "Youtube Media Close",
+        "operationId": "youtube_media_close_api_v2_youtube_browser_media__peer_id__delete",
+        "parameters": [
+          {
+            "name": "peer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Peer Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
           }
         }
       }
@@ -1356,6 +1446,22 @@
         }
       }
     },
+    "/api/v2/settings/translation/test": {
+      "post": {
+        "summary": "Test Translation",
+        "operationId": "test_translation_api_v2_settings_translation_test_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/settings/youtube-cookie": {
       "post": {
         "summary": "Youtube Cookie",
@@ -1634,7 +1740,9 @@
               "scroll",
               "key",
               "text",
-              "show"
+              "show",
+              "resize",
+              "unmute"
             ],
             "title": "Kind"
           },
@@ -1646,17 +1754,31 @@
           },
           "x": {
             "type": "number",
-            "maximum": 1280.0,
+            "maximum": 2560.0,
             "minimum": 0.0,
             "title": "X",
             "default": 0
           },
           "y": {
             "type": "number",
-            "maximum": 800.0,
+            "maximum": 1440.0,
             "minimum": 0.0,
             "title": "Y",
             "default": 0
+          },
+          "width": {
+            "type": "integer",
+            "maximum": 2560.0,
+            "minimum": 640.0,
+            "title": "Width",
+            "default": 1280
+          },
+          "height": {
+            "type": "integer",
+            "maximum": 1440.0,
+            "minimum": 360.0,
+            "title": "Height",
+            "default": 800
           },
           "dx": {
             "type": "number",
@@ -1802,6 +1924,11 @@
           "message": {
             "type": "string",
             "title": "Message"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision",
+            "default": 0
           }
         },
         "type": "object",
@@ -1850,6 +1977,36 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "LLMInput": {
+        "properties": {
+          "baseUrl": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Baseurl",
+            "default": "https://api.openai.com/v1"
+          },
+          "model": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Model",
+            "default": ""
+          },
+          "apiKey": {
+            "type": "string",
+            "maxLength": 4096,
+            "title": "Apikey",
+            "default": ""
+          },
+          "clearApiKey": {
+            "type": "boolean",
+            "title": "Clearapikey",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "LLMInput"
       },
       "LoginInput": {
         "properties": {
@@ -2044,6 +2201,28 @@
         ],
         "title": "MaterialPage"
       },
+      "MediaOffer": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "offer",
+            "title": "Type"
+          },
+          "sdp": {
+            "type": "string",
+            "maxLength": 100000,
+            "minLength": 1,
+            "title": "Sdp"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "sdp"
+        ],
+        "title": "MediaOffer"
+      },
       "ProcessingInput": {
         "properties": {
           "material_id": {
@@ -2166,6 +2345,26 @@
               }
             ],
             "title": "Publishtopicpresets"
+          },
+          "llm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LLMInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "translation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TranslationInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -2369,6 +2568,18 @@
           "created_at"
         ],
         "title": "TaskEvent"
+      },
+      "TranslationInput": {
+        "properties": {
+          "autoTranslateTitle": {
+            "type": "boolean",
+            "title": "Autotranslatetitle",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TranslationInput"
       },
       "ValidationError": {
         "properties": {

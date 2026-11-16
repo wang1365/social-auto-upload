@@ -5,6 +5,7 @@ import asyncio
 import base64
 import re
 import time
+import uuid
 from pathlib import Path
 from urllib.parse import parse_qs, quote_plus, urlsplit
 
@@ -101,6 +102,10 @@ class YouTubeBrowser:
         self.proxy = ""
         self.message = ""
         self.headed = False
+        self.controller = None
+        self.creating_controller = False
+        self.revision = 0
+        self.media_source = None
 
     async def start(
         self, proxy="", *, cookies=None, headed=False, url="https://www.youtube.com/"
@@ -113,6 +118,11 @@ class YouTubeBrowser:
             self.proxy, self.headed = proxy, headed
             from conf import LOCAL_CHROME_PATH
             options = {"headless": not headed, "viewport": {"width": self.width, "height": self.height}}
+            options["args"] = [
+                "--auto-select-tab-capture-source-by-title=SAU Capture Source",
+                "--autoplay-policy=no-user-gesture-required",
+            ]
+            options["ignore_default_args"] = ["--mute-audio"]
             if LOCAL_CHROME_PATH:
                 options["executable_path"] = LOCAL_CHROME_PATH
             else:
@@ -139,7 +149,9 @@ class YouTubeBrowser:
             return await self._state()
 
     def _select_page(self, page):
-        self.page = page
+        if not self.creating_controller and page != self.controller:
+            self.page = page
+            self.revision += 1
 
     async def _navigate(self, url):
         try:
@@ -148,20 +160,61 @@ class YouTubeBrowser:
         except BrowserError:
             self.message = "网页尚未加载完成，请检查网络或设置中的下载代理，然后刷新。"
 
-    async def _state(self):
+    async def _state(self, snapshot=False):
         if not self.page or self.page.is_closed():
-            return {"active": False, "url": "", "title": "", "video_url": None, "image": "", "width": self.width, "height": self.height, "message": ""}
+            return {"active": False, "url": "", "title": "", "video_url": None, "image": "", "width": self.width, "height": self.height, "message": "", "revision": self.revision}
         image, title = "", ""
         try:
             title = (await self.page.title()).removesuffix(" - YouTube")
-            image = "data:image/jpeg;base64," + base64.b64encode(await self.page.screenshot(type="jpeg", quality=65, timeout=5000)).decode()
+            if snapshot:
+                image = "data:image/jpeg;base64," + base64.b64encode(await self.page.screenshot(type="jpeg", quality=65, timeout=5000)).decode()
         except BrowserError:
             pass  # A navigation in progress will supply the next frame.
-        return {"active": True, "url": self.page.url, "title": title, "video_url": youtube_video_url(self.page.url), "image": image, "width": self.width, "height": self.height, "message": self.message}
+        return {"active": True, "url": self.page.url, "title": title, "video_url": youtube_video_url(self.page.url), "image": image, "width": self.width, "height": self.height, "message": self.message, "revision": self.revision}
 
-    async def state(self):
+    async def state(self, snapshot=False):
         async with self.lock:
-            return await self._state()
+            return await self._state(snapshot)
+
+    async def media_offer(self, offer):
+        async with self.lock:
+            if not self.page or self.page.is_closed():
+                raise ValueError("请先启动 YouTube 浏览器")
+            try:
+                if self.media_source != self.page and self.controller:
+                    await self.controller.close()
+                    self.controller = None
+                if not self.controller or self.controller.is_closed():
+                    self.creating_controller = True
+                    try:
+                        self.controller = await self.context.new_page()
+                    finally:
+                        self.creating_controller = False
+                    await self.controller.route("**/*", lambda route: route.fulfill(
+                        content_type="text/html", body="<title>Media Controller</title>"))
+                    await self.controller.goto("http://127.0.0.1/__sau_media")
+                    await self.controller.evaluate(Path(__file__).with_name("browser_media.js").read_text(encoding="utf-8"))
+                    self.media_source = self.page
+                title = await self.page.title()
+                await self.page.evaluate("document.title = 'SAU Capture Source'")
+                await self.page.bring_to_front()
+                try:
+                    await asyncio.wait_for(self.controller.evaluate("sauMedia.capture()"), timeout=12)
+                finally:
+                    await self.page.evaluate("title => { if (document.title === 'SAU Capture Source') document.title = title; }", title)
+                peer_id = uuid.uuid4().hex
+                answer = await self.controller.evaluate("value => sauMedia.answer(value)", {"id": peer_id, "offer": offer})
+                return {"id": peer_id, **answer, "revision": self.revision}
+            except Exception:
+                if self.controller and not self.controller.is_closed():
+                    await self.controller.close()
+                self.controller = self.media_source = None
+                raise ValueError("无法连接网页音视频流，请重连；本机需要支持网页标签页捕获的新版 Chrome") from None
+
+    async def close_media(self, peer_id):
+        async with self.lock:
+            if self.controller and not self.controller.is_closed():
+                await self.controller.evaluate("id => sauMedia.close(id)", peer_id)
 
     async def action(self, action):
         if action.kind == "show":
@@ -193,6 +246,17 @@ class YouTubeBrowser:
                     await page.keyboard.insert_text(action.text)
                 elif action.kind == "key":
                     await page.keyboard.press(action.text)
+                elif action.kind == "resize":
+                    self.width, self.height = action.width, action.height
+                    await page.set_viewport_size({"width": self.width, "height": self.height})
+                elif action.kind == "unmute":
+                    await page.evaluate("""() => {
+                        for (const media of document.querySelectorAll('video, audio')) {
+                            media.muted = false; media.volume = 1;
+                        }
+                        const player = document.querySelector('#movie_player');
+                        if (player?.unMute) player.unMute();
+                    }""")
                 self.message = ""
             except BrowserError:
                 self.message = "页面正在切换或暂时无法操作，请稍后重试。"
@@ -203,7 +267,8 @@ class YouTubeBrowser:
             if self.context:
                 await self.context.close()
         finally:
-            self.context = self.page = None
+            self.context = self.page = self.controller = self.media_source = None
+            self.revision += 1
             if self.driver:
                 await self.driver.stop()
                 self.driver = None

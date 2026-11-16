@@ -191,7 +191,7 @@ def test_full_browser_navigation_and_keyboard_work_without_contacting_youtube(tm
         browser._navigate = local_page
         try:
             state = await browser.start()
-            assert state["active"] and state["image"].startswith("data:image/jpeg;base64,")
+            assert state["active"] and (await browser.state(snapshot=True))["image"].startswith("data:image/jpeg;base64,")
             assert state["video_url"] is None
             await browser.action(BrowserAction(kind="click", x=30, y=100))
             await browser.action(BrowserAction(kind="text", text="旅行 vlog"))

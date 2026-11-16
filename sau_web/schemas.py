@@ -58,10 +58,12 @@ class YouTubeDownloadInput(DownloadInput):
 
 class BrowserAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kind: Literal["navigate", "back", "forward", "reload", "click", "scroll", "key", "text", "show"]
+    kind: Literal["navigate", "back", "forward", "reload", "click", "scroll", "key", "text", "show", "resize", "unmute"]
     text: str = Field(default="", max_length=4000)
-    x: float = Field(default=0, ge=0, le=1280)
-    y: float = Field(default=0, ge=0, le=800)
+    x: float = Field(default=0, ge=0, le=2560)
+    y: float = Field(default=0, ge=0, le=1440)
+    width: int = Field(default=1280, ge=640, le=2560)
+    height: int = Field(default=800, ge=360, le=1440)
     dx: float = Field(default=0, ge=-5000, le=5000)
     dy: float = Field(default=0, ge=-5000, le=5000)
     clicks: int = Field(default=1, ge=1, le=2)
@@ -76,16 +78,36 @@ class BrowserState(BaseModel):
     width: int
     height: int
     message: str
+    revision: int = 0
+
+
+class MediaOffer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["offer"]
+    sdp: str = Field(min_length=1, max_length=100000)
 
 
 class ProcessingInput(Input):
     material_id: int = Field(gt=0)
 
 
+class LLMInput(Input):
+    baseUrl: str = Field(default="https://api.openai.com/v1", max_length=2000)
+    model: str = Field(default="", max_length=200)
+    apiKey: str = Field(default="", max_length=4096)
+    clearApiKey: bool = False
+
+
+class TranslationInput(Input):
+    autoTranslateTitle: bool = True
+
+
 class SettingsInput(Input):
     downloadProxy: str = ""
     videoProcessing: dict[str, Any] | None = None
     publishTopicPresets: dict[str, list[str]] | None = None
+    llm: LLMInput | None = None
+    translation: TranslationInput | None = None
 
 
 class BrowserCookie(BaseModel):

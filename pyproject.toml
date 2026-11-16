@@ -38,7 +38,7 @@ include = ["sau_core*", "sau_web*", "uploader*", "utils*", "myUtils*"]
 
 [tool.setuptools.package-data]
 utils = ["stealth.min.js"]
-sau_web = ["static/*", "static/assets/*", "browser_helper/*"]
+sau_web = ["static/*", "static/assets/*", "browser_helper/*", "browser_media.js"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "httpx>=0.28,<1", "build>=1,<2"]

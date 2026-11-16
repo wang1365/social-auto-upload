@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
+import { BrowserMedia } from "../browser-media";
 import {
   ArrowLeft,
   ArrowRight,
@@ -9,6 +10,8 @@ import {
   Download,
   Promotion,
   Monitor,
+  FullScreen,
+  Close,
 } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { api, post, type BrowserState, type BrowserAction } from "../api";
@@ -22,7 +25,76 @@ const starting = ref(false),
 const problem = ref("");
 const surface = ref<HTMLElement | null>(null);
 const remoteInput = ref<HTMLTextAreaElement | null>(null);
-const image = ref("");
+const video = ref<HTMLVideoElement | null>(null);
+const workspace = ref<HTMLElement | null>(null);
+const immersive = ref(false);
+const mediaStatus = ref("正在连接音视频…");
+const muted = ref(false);
+const connecting = ref(false);
+let media: BrowserMedia | null = null;
+let mediaRevision = -1;
+let observer: ResizeObserver | undefined;
+let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+
+async function connectMedia() {
+  if (connecting.value || !browser.value?.active) return;
+  connecting.value = true;
+  media?.close();
+  media = new BrowserMedia();
+  const current = media;
+  mediaRevision = browser.value.revision;
+  mediaStatus.value = "正在连接音视频…";
+  await nextTick();
+  try {
+    await resize();
+    if (stopped || !video.value) return;
+    await current.connect(video.value, (value) => {
+      mediaStatus.value = value;
+      muted.value = video.value?.muted ?? false;
+    });
+    if (!video.value.muted) command({ kind: "unmute" });
+  } catch (error) {
+    current.close();
+    mediaStatus.value =
+      error instanceof Error ? error.message : "播放连接失败，请重连";
+  } finally {
+    connecting.value = false;
+  }
+}
+async function sound() {
+  if (!video.value) return;
+  video.value.muted = !video.value.muted;
+  muted.value = video.value.muted;
+  try {
+    await video.value.play();
+  } catch {
+    mediaStatus.value = "请点击开启声音";
+  }
+  if (!muted.value) command({ kind: "unmute" });
+}
+async function resize() {
+  if (!surface.value || !browser.value?.active) return;
+  const bounds = surface.value.getBoundingClientRect();
+  const width = Math.max(640, Math.min(2560, Math.round(bounds.width)));
+  const height = Math.max(360, Math.min(1440, Math.round(bounds.height)));
+  if (width !== browser.value.width || height !== browser.value.height)
+    apply(
+      await post<BrowserState>("/youtube/browser/action", {
+        kind: "resize",
+        width,
+        height,
+      }),
+    );
+}
+async function fullscreen() {
+  await act(async () => {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await workspace.value?.requestFullscreen();
+  });
+}
+function escape(event: KeyboardEvent) {
+  if (event.key === "Escape") immersive.value = false;
+}
 const selected = ref({ url: "", title: "" });
 const title = ref(""),
   description = ref(""),
@@ -45,30 +117,55 @@ let actions = Promise.resolve();
 
 function apply(value: BrowserState) {
   browser.value = value;
-  if (value.image) image.value = value.image;
+  if (!value.active) releaseMedia();
   problem.value = value.message;
 }
 async function poll() {
   try {
-    if (!document.hidden && !pending && !starting.value)
+    if (!document.hidden && !pending && !starting.value) {
       apply(await api<BrowserState>("/youtube/browser"));
+      if (
+        browser.value?.active &&
+        (!media || mediaRevision !== browser.value.revision)
+      )
+        void connectMedia();
+    }
   } catch (error) {
     problem.value =
       error instanceof Error ? error.message : "浏览连接中断，请重试";
   } finally {
-    if (!stopped) timer = setTimeout(poll, 1000);
+    if (!stopped) timer = setTimeout(poll, 2500);
   }
 }
-onMounted(poll);
+onMounted(() => {
+  void poll();
+  document.addEventListener("keydown", escape);
+  window.addEventListener("pagehide", releaseMedia);
+  observer = new ResizeObserver(() => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => void resize().catch(() => {}), 200);
+  });
+  if (workspace.value) observer.observe(workspace.value);
+});
+function releaseMedia() {
+  media?.close();
+  media = null;
+}
 onUnmounted(() => {
   stopped = true;
   clearTimeout(timer);
+  clearTimeout(resizeTimer);
+  observer?.disconnect();
+  releaseMedia();
+  document.removeEventListener("keydown", escape);
+  window.removeEventListener("pagehide", releaseMedia);
 });
 
 async function start() {
   starting.value = true;
   await act(async () => {
     apply(await post<BrowserState>("/youtube/browser/start"));
+    void connectMedia();
   });
   starting.value = false;
 }
@@ -95,11 +192,17 @@ function point(event: MouseEvent) {
   return {
     x: Math.max(
       0,
-      Math.min(1280, ((event.clientX - bounds.left) * 1280) / bounds.width),
+      Math.min(
+        browser.value!.width,
+        ((event.clientX - bounds.left) * browser.value!.width) / bounds.width,
+      ),
     ),
     y: Math.max(
       0,
-      Math.min(800, ((event.clientY - bounds.top) * 800) / bounds.height),
+      Math.min(
+        browser.value!.height,
+        ((event.clientY - bounds.top) * browser.value!.height) / bounds.height,
+      ),
     ),
   };
 }
@@ -127,6 +230,10 @@ function key(event: KeyboardEvent) {
     return;
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v")
     return;
+  if (event.key === "Escape") {
+    immersive.value = false;
+    return;
+  }
   event.preventDefault();
   if (
     event.key.length === 1 &&
@@ -153,8 +260,9 @@ function composed(event: CompositionEvent) {
   if (event.data) command({ kind: "text", text: event.data });
   if (remoteInput.value) remoteInput.value.value = "";
 }
-function compose() {
+async function compose() {
   if (!browser.value?.video_url) return;
+  if (document.fullscreenElement) await document.exitFullscreen();
   selected.value = { url: browser.value.video_url, title: browser.value.title };
   title.value = selected.value.title.slice(0, 200);
   description.value = "";
@@ -167,6 +275,7 @@ function compose() {
 }
 async function download(alsoPublish: boolean) {
   if (submitting.value) return;
+  if (document.fullscreenElement) await document.exitFullscreen();
   const videoUrl = alsoPublish ? selected.value.url : browser.value?.video_url;
   if (!videoUrl) return;
   if (alsoPublish && (!accountIds.value.length || !title.value.trim())) {
@@ -202,26 +311,23 @@ async function download(alsoPublish: boolean) {
   submitting.value = false;
 }
 async function closeBrowser() {
+  releaseMedia();
   starting.value = true;
   await act(async () => {
     await api("/youtube/browser", { method: "DELETE" });
     browser.value = null;
-    image.value = "";
   });
   starting.value = false;
 }
 </script>
 
 <template>
-  <div class="page-heading">
-    <div>
-      <div class="eyebrow">发现与分发</div>
-      <h1>YouTube 浏览</h1>
-      <p>浏览完整站点，选中当前视频，一次下载，分发到多个平台。</p>
-    </div>
-    <router-link to="/downloads">查看下载任务 →</router-link>
-  </div>
-  <section class="panel youtube-workspace">
+  <section
+    ref="workspace"
+    class="panel youtube-workspace"
+    :class="{ immersive }"
+  >
+    <h1 class="sr-only">YouTube 浏览</h1>
     <div class="youtube-toolbar">
       <el-button-group
         ><el-button
@@ -252,13 +358,32 @@ async function closeBrowser() {
       <el-button
         :icon="Monitor"
         :disabled="!browser?.active"
-        @click="command({ kind: 'show' })"
-        >独立窗口播放</el-button
-      >
-    </div>
-    <div v-if="browser?.active" class="youtube-location">
-      <span class="youtube-dot"></span><span>{{ browser.url }}</span
-      ><el-button link @click="closeBrowser">关闭浏览</el-button>
+        title="独立窗口播放"
+        aria-label="独立窗口播放"
+        @click="
+          releaseMedia();
+          command({ kind: 'show' });
+        "
+      />
+      <el-button :disabled="!browser?.active" @click="sound">{{
+        muted ? "开启声音" : "静音"
+      }}</el-button>
+      <el-button @click="immersive = !immersive">{{
+        immersive ? "退出沉浸" : "沉浸"
+      }}</el-button>
+      <el-button
+        :icon="FullScreen"
+        aria-label="全屏"
+        title="全屏 / Esc 退出"
+        @click="fullscreen"
+      />
+      <el-button
+        :icon="Close"
+        aria-label="关闭浏览"
+        title="关闭浏览"
+        :disabled="!browser?.active"
+        @click="closeBrowser"
+      />
     </div>
     <el-alert
       v-if="problem"
@@ -293,13 +418,29 @@ async function closeBrowser() {
       @click="click"
       @wheel.prevent="wheel"
     >
-      <img
-        v-if="image"
-        :src="image"
-        alt="YouTube 浏览器网页"
-        draggable="false"
+      <video
+        ref="video"
+        class="youtube-video"
+        aria-label="YouTube 浏览器网页"
+        autoplay
+        playsinline
+        @volumechange="muted = video?.muted ?? false"
       />
-      <div v-else class="youtube-loading">正在加载网页…</div>
+      <div
+        v-if="mediaStatus !== '实时播放' && mediaStatus !== '点击开启声音'"
+        class="youtube-stream-status"
+        @click.stop
+      >
+        <span>{{ mediaStatus }}</span><el-button
+          size="small"
+          :loading="connecting"
+          @click="connectMedia"
+          >重连播放</el-button
+        >
+      </div>
+      <button v-if="muted" class="youtube-audio-prompt" @click.stop="sound">
+        开启声音
+      </button>
       <textarea
         ref="remoteInput"
         class="youtube-input"
@@ -318,12 +459,6 @@ async function closeBrowser() {
             ? browser.title || "当前视频"
             : "打开一条视频，即可下载或发布"
         }}</strong>
-        <p class="muted small">
-          {{
-            browser?.video_url ||
-            "可以在网页内搜索和点击，也可以在上方输入链接。"
-          }}
-        </p>
       </div>
       <el-checkbox v-model="subtitles">下载可用字幕</el-checkbox>
       <el-button
@@ -342,11 +477,8 @@ async function closeBrowser() {
       >
     </div>
   </section>
-  <p class="muted small youtube-footnote">
-    网页交互保留在系统内；需要视频声音时，点击“独立窗口播放”。浏览和下载使用设置中的代理与
-    YouTube 登录凭据，更新凭据后请关闭并重新启动浏览器。
-  </p>
-  <section v-if="related.length" class="panel youtube-recent">
+  <details v-if="related.length" class="panel youtube-recent">
+    <summary>最近下载与分发（{{ related.length }}）</summary>
     <div class="section-heading">
       <h2>最近下载与分发</h2>
       <router-link to="/publish">查看发布进度 →</router-link>
@@ -361,7 +493,7 @@ async function closeBrowser() {
         >{{ task.phase }} →</span
       >
     </button>
-  </section>
+  </details>
   <el-dialog
     v-model="dialog"
     title="下载并发布到多个平台"
@@ -421,48 +553,71 @@ async function closeBrowser() {
 </template>
 
 <style scoped>
-.youtube-workspace {
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
   overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+.youtube-workspace {
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 24px);
+  min-height: 480px;
+  overflow: hidden;
+}
+.youtube-workspace.immersive {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  height: 100dvh;
+  border-radius: 0;
+  border: 0;
+}
+.youtube-workspace:fullscreen {
+  height: 100dvh;
+  width: 100vw;
+  background: #fff;
 }
 .youtube-toolbar {
   display: flex;
-  gap: 10px;
-  padding: 14px;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
   border-bottom: 1px solid #edf0f5;
+  flex-shrink: 0;
 }
 .youtube-toolbar .el-input {
   flex: 1;
-  min-width: 180px;
+  min-width: 100px;
 }
-.youtube-location {
+.youtube-toolbar .el-button + .el-button {
+  margin-left: 0;
+}
+.youtube-toolbar > .el-button {
+  padding: 8px;
+}
+.youtube-toolbar .el-button-group {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 16px;
-  height: 38px;
-  color: #7d8799;
-  font-size: 12px;
+  flex-shrink: 0;
 }
-.youtube-location > span:nth-child(2) {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.youtube-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #e34c4c;
+.youtube-toolbar .el-button-group .el-button {
+  padding: 8px;
 }
 .youtube-welcome {
-  min-height: 470px;
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 20px;
   background: linear-gradient(145deg, #fff, #f7f9fd);
+  padding: 20px;
+  text-align: center;
 }
 .youtube-welcome h2 {
   font-size: 22px;
@@ -483,22 +638,44 @@ async function closeBrowser() {
 .youtube-surface {
   position: relative;
   width: 100%;
-  aspect-ratio: 8/5;
-  background: #fff;
+  flex: 1;
+  min-height: 0;
+  background: #111;
   overflow: hidden;
   outline-offset: -3px;
 }
-.youtube-surface img {
+.youtube-video {
   display: block;
   width: 100%;
   height: 100%;
+  object-fit: fill;
   user-select: none;
 }
-.youtube-loading {
-  display: grid;
-  place-items: center;
-  height: 100%;
-  color: #8792a5;
+.youtube-stream-status {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  background: #fffef0ee;
+  color: #544b30;
+  padding: 8px 12px;
+  border-radius: 8px;
+  max-width: 90%;
+  font-size: 12px;
+}
+.youtube-audio-prompt {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 16px;
+  background: #fff;
+  color: #354f77;
+  cursor: pointer;
 }
 .youtube-input {
   position: absolute;
@@ -515,8 +692,9 @@ async function closeBrowser() {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 18px;
+  padding: 8px 12px;
   border-top: 1px solid #edf0f5;
+  flex-shrink: 0;
 }
 .youtube-current > div {
   flex: 1;
@@ -527,15 +705,7 @@ async function closeBrowser() {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.youtube-current p {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-top: 4px;
-}
-.youtube-footnote {
-  margin: 12px 0 20px;
+  font-size: 13px;
 }
 .youtube-publish-form {
   margin-top: 20px;
@@ -545,7 +715,13 @@ async function closeBrowser() {
   flex-direction: column;
 }
 .youtube-recent {
-  margin-top: 18px;
+  margin-top: 12px;
+}
+.youtube-recent summary {
+  padding: 12px 20px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #55647a;
 }
 .youtube-task {
   border: 0;
@@ -563,16 +739,16 @@ async function closeBrowser() {
 .youtube-task:hover {
   background: #f8faff;
 }
-@media (max-width: 1100px) {
+@media (max-width: 800px) {
   .youtube-toolbar {
     flex-wrap: wrap;
   }
   .youtube-toolbar .el-input {
-    order: 2;
-    flex-basis: 70%;
+    min-width: 150px;
   }
   .youtube-current {
     flex-wrap: wrap;
+    gap: 6px;
   }
   .youtube-current > div {
     flex-basis: 100%;

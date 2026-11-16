@@ -565,8 +565,17 @@ def create_app(home: Path | None = None, *, start_workers=True):
         return queue("download", body.url, body.model_dump())
 
     @app.get(API + "/youtube/browser", response_model=schemas.BrowserState)
-    async def youtube_state():
-        return await youtube_browser.state()
+    async def youtube_state(snapshot: bool = False):
+        return await youtube_browser.state(snapshot)
+
+    @app.post(API + "/youtube/browser/media")
+    async def youtube_media(body: schemas.MediaOffer):
+        return await youtube_browser.media_offer(body.model_dump())
+
+    @app.delete(API + "/youtube/browser/media/{peer_id}", status_code=204)
+    async def youtube_media_close(peer_id: str):
+        await youtube_browser.close_media(peer_id)
+        return Response(status_code=204)
 
     @app.post(API + "/youtube/browser/start", response_model=schemas.BrowserState)
     async def youtube_start():
@@ -706,9 +715,16 @@ def create_app(home: Path | None = None, *, start_workers=True):
             services()
             .SettingsService()
             .save_settings(
-                body.downloadProxy, body.videoProcessing, body.publishTopicPresets
+                body.downloadProxy, body.videoProcessing, body.publishTopicPresets,
+                body.llm.model_dump() if body.llm else None,
+                body.translation.model_dump() if body.translation else None,
             )
         )
+
+    @app.post(API + "/settings/translation/test")
+    def test_translation():
+        from sau_core.title_translation import translate_title_to_zh
+        return {"title": translate_title_to_zh("A beautiful day in Tokyo", strict=True)}
 
     def save_youtube_cookie(data):
         if len(data) > 2 * 1024 * 1024:

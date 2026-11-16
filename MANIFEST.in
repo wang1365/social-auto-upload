@@ -1,5 +1,6 @@
 recursive-include sau_web/static *
 recursive-include sau_web/browser_helper *
 include utils/stealth.min.js
+include sau_web/browser_media.js
 include conf.example.py
 exclude conf.py

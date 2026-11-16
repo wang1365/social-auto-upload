@@ -350,6 +350,40 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v2/youtube/browser/media": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Youtube Media */
+    post: operations["youtube_media_api_v2_youtube_browser_media_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v2/youtube/browser/media/{peer_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Youtube Media Close */
+    delete: operations["youtube_media_close_api_v2_youtube_browser_media__peer_id__delete"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v2/youtube/browser/start": {
     parameters: {
       query?: never;
@@ -522,6 +556,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v2/settings/translation/test": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Test Translation */
+    post: operations["test_translation_api_v2_settings_translation_test_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v2/settings/youtube-cookie": {
     parameters: {
       query?: never;
@@ -655,7 +706,9 @@ export interface components {
         | "scroll"
         | "key"
         | "text"
-        | "show";
+        | "show"
+        | "resize"
+        | "unmute";
       /**
        * Text
        * @default
@@ -671,6 +724,16 @@ export interface components {
        * @default 0
        */
       y: number;
+      /**
+       * Width
+       * @default 1280
+       */
+      width: number;
+      /**
+       * Height
+       * @default 800
+       */
+      height: number;
       /**
        * Dx
        * @default 0
@@ -736,6 +799,11 @@ export interface components {
       height: number;
       /** Message */
       message: string;
+      /**
+       * Revision
+       * @default 0
+       */
+      revision: number;
     };
     /** DownloadInput */
     DownloadInput: {
@@ -751,6 +819,29 @@ export interface components {
     HTTPValidationError: {
       /** Detail */
       detail?: components["schemas"]["ValidationError"][];
+    };
+    /** LLMInput */
+    LLMInput: {
+      /**
+       * Baseurl
+       * @default https://api.openai.com/v1
+       */
+      baseUrl: string;
+      /**
+       * Model
+       * @default
+       */
+      model: string;
+      /**
+       * Apikey
+       * @default
+       */
+      apiKey: string;
+      /**
+       * Clearapikey
+       * @default false
+       */
+      clearApiKey: boolean;
     };
     /** LoginInput */
     LoginInput: {
@@ -815,6 +906,16 @@ export interface components {
       /** Page Size */
       page_size: number;
     };
+    /** MediaOffer */
+    MediaOffer: {
+      /**
+       * Type
+       * @constant
+       */
+      type: "offer";
+      /** Sdp */
+      sdp: string;
+    };
     /** ProcessingInput */
     ProcessingInput: {
       /** Material Id */
@@ -858,6 +959,8 @@ export interface components {
       publishTopicPresets?: {
         [key: string]: string[];
       } | null;
+      llm?: components["schemas"]["LLMInput"] | null;
+      translation?: components["schemas"]["TranslationInput"] | null;
     };
     /** Task */
     Task: {
@@ -929,6 +1032,14 @@ export interface components {
       };
       /** Created At */
       created_at: string;
+    };
+    /** TranslationInput */
+    TranslationInput: {
+      /**
+       * Autotranslatetitle
+       * @default true
+       */
+      autoTranslateTitle: boolean;
     };
     /** ValidationError */
     ValidationError: {
@@ -1688,7 +1799,9 @@ export interface operations {
   };
   youtube_state_api_v2_youtube_browser_get: {
     parameters: {
-      query?: never;
+      query?: {
+        snapshot?: boolean;
+      };
       header?: never;
       path?: never;
       cookie?: never;
@@ -1702,6 +1815,15 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["BrowserState"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };
@@ -1721,6 +1843,68 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
+      };
+    };
+  };
+  youtube_media_api_v2_youtube_browser_media_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["MediaOffer"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": unknown;
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  youtube_media_close_api_v2_youtube_browser_media__peer_id__delete: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        peer_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
       };
     };
   };
@@ -2087,6 +2271,26 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  test_translation_api_v2_settings_translation_test_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": unknown;
         };
       };
     };

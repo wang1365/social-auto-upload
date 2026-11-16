@@ -17,6 +17,8 @@ interface Settings {
   defaultVideoProcessing: Record<string, any>;
   publishTopicPresets: Record<string, string[]>;
   tools: Record<string, boolean>;
+  llm: { baseUrl: string; model: string; apiKeyConfigured: boolean };
+  translation: { autoTranslateTitle: boolean };
 }
 const settings = ref<Settings>({
   downloadProxy: "",
@@ -26,7 +28,16 @@ const settings = ref<Settings>({
   defaultVideoProcessing: {},
   publishTopicPresets: {},
   tools: {},
+  llm: {
+    baseUrl: "https://api.openai.com/v1",
+    model: "",
+    apiKeyConfigured: false,
+  },
+  translation: { autoTranslateTitle: true },
 });
+const apiKey = ref("");
+const clearApiKey = ref(false);
+const testingTranslation = ref(false);
 const loaded = ref(false);
 const original = ref("");
 const busy = ref(false);
@@ -175,12 +186,18 @@ function snapshot() {
   return JSON.stringify([
     settings.value.downloadProxy,
     settings.value.videoProcessing,
+    settings.value.llm,
+    settings.value.translation,
+    apiKey.value,
+    clearApiKey.value,
     presets.value,
   ]);
 }
 async function load() {
   const result = await api<Settings>("/settings");
   settings.value = result;
+  apiKey.value = "";
+  clearApiKey.value = false;
   loaded.value = true;
   presets.value = Object.entries(result.publishTopicPresets).map(
     ([name, tags]) => ({ name, tags: tags.join("，") }),
@@ -205,6 +222,13 @@ async function save() {
     const body = {
       downloadProxy: settings.value!.downloadProxy,
       videoProcessing: settings.value!.videoProcessing,
+      llm: {
+        baseUrl: settings.value.llm.baseUrl,
+        model: settings.value.llm.model,
+        apiKey: apiKey.value,
+        clearApiKey: clearApiKey.value,
+      },
+      translation: settings.value.translation,
       publishTopicPresets: Object.fromEntries(
         presets.value.map((p) => [
           p.name.trim(),
@@ -220,6 +244,18 @@ async function save() {
     ElMessage.success("设置已保存");
   });
   busy.value = false;
+}
+async function testTranslation() {
+  if (original.value !== snapshot()) {
+    ElMessage.warning("请先保存设置，再测试翻译");
+    return;
+  }
+  testingTranslation.value = true;
+  await act(async () => {
+    const result = await post<{ title: string }>("/settings/translation/test");
+    ElMessage.success("翻译成功：" + result.title);
+  });
+  testingTranslation.value = false;
 }
 async function cookie(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0];
@@ -294,6 +330,7 @@ async function clearCookie() {
       <button
         v-for="item in [
           { key: 'download', label: '下载设置' },
+          { key: 'translation', label: '大模型与翻译' },
           { key: 'processing', label: '视频处理' },
           { key: 'topics', label: '话题模板' },
         ]"
@@ -382,6 +419,59 @@ async function clearCookie() {
           >
         </div></template
       >
+      <template v-else-if="tab === 'translation'">
+        <div class="section-heading">
+          <div>
+            <h2>大模型与翻译</h2>
+            <span class="muted small"
+              >下载标题自动转为中文，保留原始标题供查看</span
+            >
+          </div>
+        </div>
+        <el-form label-position="top" class="settings-form">
+          <el-form-item label="API 地址"
+            ><el-input
+              v-model="settings.llm.baseUrl"
+              placeholder="https://api.openai.com/v1"
+            />
+            <p class="field-hint">
+              支持兼容 OpenAI Chat Completions 的服务及本地模型，填写包含 /v1
+              的基础地址。标题会发送给此服务进行翻译。
+            </p></el-form-item
+          >
+          <el-form-item label="模型名称"
+            ><el-input
+              v-model="settings.llm.model"
+              placeholder="填写服务商提供的模型名称"
+          /></el-form-item>
+          <el-form-item label="API 密钥"
+            ><el-input
+              v-model="apiKey"
+              type="password"
+              show-password
+              autocomplete="new-password"
+              :placeholder="
+                settings.llm.apiKeyConfigured
+                  ? '已保存，留空保留原密钥'
+                  : '本地模型无需密钥时可留空'
+              "
+            /><el-checkbox
+              v-if="settings.llm.apiKeyConfigured"
+              v-model="clearApiKey"
+              >清除已保存的密钥</el-checkbox
+            ></el-form-item
+          >
+          <el-form-item label="自动翻译视频标题"
+            ><el-switch v-model="settings.translation.autoTranslateTitle" />
+            <p class="field-hint">
+              默认开启。新下载的视频使用中文标题作为文件名和素材标题；未配置模型或翻译失败时保留原标题，视频继续下载。此开关仅控制标题，字幕处理沿用原设置；手动填写的发布文案保持原样。
+            </p></el-form-item
+          >
+          <el-button :loading="testingTranslation" @click="testTranslation"
+            >测试已保存的翻译配置</el-button
+          >
+        </el-form>
+      </template>
       <template v-else-if="tab === 'processing'"
         ><div class="section-heading">
           <div>
