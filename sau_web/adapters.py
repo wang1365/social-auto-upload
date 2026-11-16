@@ -109,5 +109,7 @@ def make_uploader(platform, cookie, video, title, description, tags):
         return module.TencentVideo(**common)
     uploader_type = {1: "XiaoHongShuVideo", 3: "DouYinVideo", 4: "KSVideo"}[platform]
     return getattr(module, uploader_type)(
-        **common, desc=description, headless=True, debug=False
+        # Douyin may require SMS verification on publish even with valid cookies.
+        # Keep this page visible so the user can complete it without losing the upload.
+        **common, desc=description, headless=platform != 3, debug=False
     )

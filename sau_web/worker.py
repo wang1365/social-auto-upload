@@ -201,19 +201,24 @@ class Worker:
             phase="正在提交发布", result={"attempted": True}
         )
         uploader.on_upload_progress = lambda message: self.update(phase=message)
+        uploader.on_publish_verification = lambda message: self.update(phase=message)
+        uploader.publish_diagnostic_path = self.home / "runtime" / "publish-diagnostics" / self.id
         uploader.on_publish_confirmed = lambda: self.update(
             phase="平台已确认发布", result={"attempted": True, "confirmed": True}
         )
         self.update(phase="正在上传并填写文案")
         try:
             await asyncio.wait_for(uploader.main(), timeout=1800)
-        except Exception:
+        except Exception as exc:
             if not getattr(uploader, "publish_confirmed", False):
                 if getattr(uploader, "publish_attempted", False):
+                    self.record(f"发布后未确认：{exc}")
                     self.update(
                         status="unknown",
                         phase="结果待核实，请先到平台确认",
-                        error="提交后未能确认最终结果",
+                        error="抖音触发安全验证，尚未收到发布确认，请先到平台核实"
+                        if getattr(uploader, "publish_verification_required", False)
+                        else "提交后未能确认最终结果",
                     )
                     return
                 raise

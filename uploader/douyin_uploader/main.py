@@ -7,6 +7,7 @@ import inspect
 import os
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from patchright.async_api import Page
 from patchright.async_api import Playwright
@@ -31,6 +32,8 @@ DOUYIN_AUTH_TIMEOUT_MS = 15000
 DOUYIN_UPLOAD_MAX_RETRIES = 2
 DOUYIN_UPLOAD_RETRY_DELAY = 2
 DOUYIN_UPLOAD_TIMEOUT_SECONDS = 300
+DOUYIN_PUBLISH_TIMEOUT_SECONDS = 60
+DOUYIN_VERIFICATION_TIMEOUT_SECONDS = 600
 
 
 def _msg(emoji: str, text: str) -> str:
@@ -522,6 +525,65 @@ class DouYinVideo(DouYinBaseUploader):
                     douyin_logger.warning(_msg("😵", f"推荐封面没选成功: {e}"))
         return False
 
+    async def _capture_publish_diagnostic(self, page):
+        target = getattr(self, "publish_diagnostic_path", None)
+        if not target:
+            return
+        try:
+            target = Path(target)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if getattr(self, "publish_verification_required", False):
+                # Never save screenshots of a user's entered verification code.
+                target.with_suffix(".txt").write_text("抖音要求人工安全验证，未收到发布成功确认。", encoding="utf-8")
+                return
+            await page.screenshot(path=str(target.with_suffix(".png")), full_page=True)
+            target.with_suffix(".txt").write_text(
+                await page.locator("body").inner_text(), encoding="utf-8"
+            )
+        except Exception:
+            douyin_logger.warning("未能保存抖音发布页面诊断")
+
+    async def _publish_video(
+        self, page, timeout=DOUYIN_PUBLISH_TIMEOUT_SECONDS,
+        verification_timeout=DOUYIN_VERIFICATION_TIMEOUT_SECONDS,
+    ):
+        button = page.get_by_role("button", name="发布", exact=True)
+        await button.wait_for(state="visible", timeout=15000)
+        attempted(self)
+        try:
+            await button.click(timeout=15000)
+            self._upload_phase("已点击发布，正在等待平台确认")
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                url = urlsplit(page.url)
+                if url.hostname == "creator.douyin.com" and url.path.startswith("/creator-micro/content/manage"):
+                    self.publish_verification_required = False
+                    confirmed(self)
+                    douyin_logger.success("抖音已确认发布并进入内容管理")
+                    return
+                challenge = page.get_by_text("接收短信验证码", exact=True).filter(visible=True)
+                if not getattr(self, "publish_verification_required", False) and await challenge.count():
+                    self.publish_verification_required = True
+                    message = "抖音要求短信验证，请在弹出的抖音浏览器中完成；验证后继续发布，最多等待 10 分钟"
+                    douyin_logger.warning(message)
+                    callback = getattr(self, "on_publish_verification", None)
+                    if callback:
+                        callback(message)
+                    await page.bring_to_front()
+                    deadline = time.monotonic() + verification_timeout
+                await asyncio.sleep(min(.5, max(0, deadline - time.monotonic())))
+            if getattr(self, "publish_verification_required", False):
+                raise RuntimeError("抖音安全验证等待超时，未收到平台发布确认，请先核实结果")
+            hints = page.locator('[role="alert"], [role="dialog"], .semi-toast-content').filter(visible=True)
+            detail = "；".join(await hints.all_text_contents())[:600]
+            raise RuntimeError(
+                f"抖音发布后未收到平台确认（等待 {timeout:g} 秒）"
+                + (f"。页面提示：{detail}" if detail else "，请到平台核实")
+            )
+        except Exception:
+            await self._capture_publish_diagnostic(page)
+            raise
+
     async def set_thumbnail(self, page: Page):
         if not self.thumbnail_landscape_path and not self.thumbnail_portrait_path:
             return
@@ -579,26 +641,7 @@ class DouYinVideo(DouYinBaseUploader):
             if self.publish_strategy == DOUYIN_PUBLISH_STRATEGY_SCHEDULED and self.publish_date != 0:
                 await self.set_schedule_time_douyin(page, self.publish_date)
 
-            while True:
-                try:
-                    publish_button = page.get_by_role("button", name="发布", exact=True)
-                    if await publish_button.count():
-                        attempted(self)
-                        await publish_button.click()
-                    await page.wait_for_url(
-                        "https://creator.douyin.com/creator-micro/content/manage**",
-                        timeout=3000,
-                    )
-                    douyin_logger.success(_msg("🥳", "视频发布成功，小人开心收工"))
-                    confirmed(self)
-                    break
-                except Exception:
-                    stop_web_resubmission(self)
-                    await self.handle_auto_video_cover(page)
-                    douyin_logger.info(_msg("🏃", "小人正在冲刺发布视频"))
-                    if self.debug:
-                        await page.screenshot(full_page=True)
-                    await asyncio.sleep(0.5)
+            await self._publish_video(page)
 
             await context.storage_state(path=self.account_file)
             douyin_logger.success(_msg("🥳", "cookie 更新完毕"))
