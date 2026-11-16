@@ -4,12 +4,61 @@ from __future__ import annotations
 import asyncio
 import base64
 import re
+import time
+from pathlib import Path
 from urllib.parse import parse_qs, quote_plus, urlsplit
 
 from playwright.async_api import Error as BrowserError, async_playwright
 
 
 YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
+
+
+def load_browser_cookies(cookie_file):
+    """Read Netscape cookies without exposing credential values in diagnostics."""
+    try:
+        lines = Path(cookie_file).read_text(encoding="utf-8-sig").splitlines()
+        cookies = []
+        for line in lines:
+            http_only = line.startswith("#HttpOnly_")
+            if not line.strip() or (line.startswith("#") and not http_only):
+                continue
+            if http_only:
+                line = line[len("#HttpOnly_"):]
+            domain, subdomains, path, secure, expiry, name, value = line.split("\t")
+            host = domain.lstrip(".").lower()
+            if not any(
+                host == root or host.endswith("." + root)
+                for root in ("youtube.com", "google.com")
+            ):
+                continue
+            if (
+                subdomains not in {"TRUE", "FALSE"}
+                or secure not in {"TRUE", "FALSE"}
+                or not path.startswith("/")
+            ):
+                raise ValueError()
+            expires = int(expiry) if expiry else 0
+            if expires > 0 and expires <= time.time():
+                continue
+            cookie = {
+                "name": name,
+                "value": value,
+                "path": path,
+                "domain": ("." if subdomains == "TRUE" else "") + host,
+                "secure": secure == "TRUE",
+                "httpOnly": http_only,
+            }
+            if expires > 0:
+                cookie["expires"] = expires
+            cookies.append(cookie)
+    except (OSError, UnicodeError, ValueError):
+        raise ValueError(
+            "无法读取已保存的 YouTube Cookie，请在设置中重新导入有效的 Netscape Cookie 文件"
+        ) from None
+    if not cookies:
+        raise ValueError("已保存的 Cookie 中没有未过期的 YouTube 或 Google 凭据，请重新导入")
+    return cookies
 
 
 def youtube_video_url(value: str) -> str | None:
@@ -55,7 +104,9 @@ class YouTubeBrowser:
         self.message = ""
         self.headed = False
 
-    async def start(self, proxy="", *, headed=False, url="https://www.youtube.com/"):
+    async def start(
+        self, proxy="", *, cookies=None, headed=False, url="https://www.youtube.com/"
+    ):
         async with self.lock:
             if self.context and self.page and not self.page.is_closed():
                 return await self._state()
@@ -79,6 +130,8 @@ class YouTubeBrowser:
                 profile = self.home / "runtime" / "youtube-browser" / "profile"
                 profile.mkdir(parents=True, exist_ok=True)
                 self.context = await self.driver.chromium.launch_persistent_context(str(profile), **options)
+                if cookies:
+                    await self.context.add_cookies(cookies)
                 self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
                 self.context.on("page", self._select_page)
                 await self._navigate(url)
@@ -114,9 +167,15 @@ class YouTubeBrowser:
 
     async def action(self, action):
         if action.kind == "show":
-            url, proxy = (self.page.url if self.page else "https://www.youtube.com/"), self.proxy
+            async with self.lock:
+                url = (
+                    self.page.url if self.page and not self.page.is_closed()
+                    else "https://www.youtube.com/"
+                )
+                proxy = self.proxy
+                cookies = await self.context.cookies() if self.context else []
             await self.close()
-            return await self.start(proxy, headed=True, url=url)
+            return await self.start(proxy, cookies=cookies, headed=True, url=url)
         async with self.lock:
             if not self.page or self.page.is_closed():
                 raise ValueError("请先启动 YouTube 浏览器")

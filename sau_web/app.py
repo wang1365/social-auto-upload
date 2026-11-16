@@ -24,7 +24,7 @@ from sau_web.adapters import PLATFORMS
 from sau_web.paths import default_home
 from sau_web.runtime import Runtime, configure
 from sau_web.store import ACTIVE, Conflict, Store
-from sau_web.youtube_browser import YouTubeBrowser, youtube_video_url
+from sau_web.youtube_browser import YouTubeBrowser, load_browser_cookies, youtube_video_url
 
 API = "/api/v2"
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm", ".flv", ".wmv"}
@@ -567,7 +567,11 @@ def create_app(home: Path | None = None, *, start_workers=True):
 
     @app.post(API + "/youtube/browser/start", response_model=schemas.BrowserState)
     async def youtube_start():
-        return await youtube_browser.start(services().get_system_setting("download_proxy", "").strip())
+        cookie_file = services().get_youtube_cookie_path()
+        return await youtube_browser.start(
+            services().get_system_setting("download_proxy", "").strip(),
+            cookies=load_browser_cookies(cookie_file) if cookie_file else None,
+        )
 
     @app.post(API + "/youtube/browser/action", response_model=schemas.BrowserState)
     async def youtube_action(body: schemas.BrowserAction):
@@ -759,6 +763,7 @@ def create_app(home: Path | None = None, *, start_workers=True):
         messages = {
             "invalid_proxy": "请输入有效的 HTTP、HTTPS 或 SOCKS5 代理地址",
             "invalid_cookie": "登录凭据文件格式无效，请检查后重新导入",
+            "missing_cookie": "已保存的 YouTube Cookie 文件不存在，请在设置中重新导入",
             "invalid_path": "文件路径无效",
             "missing_file": "找不到所选文件",
         }

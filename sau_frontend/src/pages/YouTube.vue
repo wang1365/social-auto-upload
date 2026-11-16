@@ -272,7 +272,7 @@ async function closeBrowser() {
         ><el-icon><VideoPlay /></el-icon
       ></span>
       <h2>在这里打开完整 YouTube</h2>
-      <p>搜索、浏览频道、点击视频，登录状态保存在本机。</p>
+      <p>启动时自动加载设置中已保存的 YouTube Cookie，登录状态保存在本机。</p>
       <el-button
         type="primary"
         :loading="starting"
@@ -343,8 +343,8 @@ async function closeBrowser() {
     </div>
   </section>
   <p class="muted small youtube-footnote">
-    网页交互保留在系统内；需要视频声音时，点击“独立窗口播放”。下载使用设置中的代理与
-    YouTube 登录凭据。
+    网页交互保留在系统内；需要视频声音时，点击“独立窗口播放”。浏览和下载使用设置中的代理与
+    YouTube 登录凭据，更新凭据后请关闭并重新启动浏览器。
   </p>
   <section v-if="related.length" class="panel youtube-recent">
     <div class="section-heading">
@@ -357,8 +357,9 @@ async function closeBrowser() {
       class="youtube-task"
       @click="drawerTask = task.id"
     >
-      <span class="ellipsis">{{ task.payload.url }}</span
-      ><span>{{ task.phase }} →</span>
+      <span class="ellipsis">{{ task.payload.url }}</span><span
+        >{{ task.phase }} →</span
+      >
     </button>
   </section>
   <el-dialog
@@ -403,9 +404,7 @@ async function closeBrowser() {
     </el-form>
     <div class="info-box">
       将下载 1 条视频，成功后立即创建
-      {{
-        accountIds.length
-      }}
+      {{ accountIds.length }}
       条发布任务。下载失败不会发布；离开页面后任务继续执行。
     </div>
     <template #footer

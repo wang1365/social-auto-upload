@@ -221,7 +221,9 @@ async function cookie(event: Event) {
       await api("/settings/youtube-cookie", { method: "POST", body: form });
       settings.value!.youtubeCookieConfigured = true;
       settings.value!.youtubeCookieFileName = file.name;
-      ElMessage.success("登录凭据已导入");
+      ElMessage.success(
+        "登录凭据已导入，重新启动 YouTube 浏览器后用于网页登录",
+      );
     });
   if (cookieInput.value) cookieInput.value.value = "";
 }
@@ -277,7 +279,9 @@ async function clearCookie() {
               clearable
             />
             <p class="field-hint">
-              支持 HTTP、HTTPS 和 SOCKS5。仅用于 YouTube；抖音、小红书、快手和视频号始终直连。修改后请关闭并重新启动 YouTube 浏览器。
+              支持 HTTP、HTTPS 和 SOCKS5。仅用于
+              YouTube；抖音、小红书、快手和视频号始终直连。修改后请关闭并重新启动
+              YouTube 浏览器。
             </p></el-form-item
           ><el-form-item label="YouTube 登录凭据"
             ><div class="cookie-card">
@@ -291,7 +295,10 @@ async function clearCookie() {
                   settings.youtubeCookieConfigured ? "已配置" : "未配置"
                 }}</span
               >
-              <p>导入 Netscape 格式的 Cookie 文件，用于需要登录的视频下载。</p>
+              <p>
+                导入 Netscape 格式的 Cookie 文件，用于 YouTube
+                网页登录和视频下载。导入后请关闭并重新启动 YouTube 浏览器。
+              </p>
               <el-button :icon="Upload" @click="cookieInput?.click()"
                 >导入文件</el-button
               ><el-button

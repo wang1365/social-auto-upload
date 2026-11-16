@@ -42,7 +42,9 @@ uv run sau-web --port 8766 --home D:\ShiguangData
 
 视频号不单独提交正文描述。首版 Web 只提供立即发布视频；B站、图文和原有定时能力继续通过已有 CLI/底层入口使用，不在此版本扩展 UI。
 
-YouTube 网页画面和交互显示在系统内；需要声音时可点击“独立窗口播放”，使用同一个浏览会话在 Chrome 窗口播放。YouTube 登录资料仅保存在本机的 `runtime/youtube-browser/`，浏览器关闭后仍保留。下载使用设置中导入的 Netscape Cookie；网页登录与下载 Cookie 独立管理。自动分发使用下载完成的原视频，独立的视频处理任务仍可继续运行。
+YouTube 网页画面和交互显示在系统内；需要声音时可点击“独立窗口播放”，沿用当前浏览会话的 Cookie 在 Chrome 窗口播放。启动浏览时自动加载设置中已导入的 Netscape Cookie，可复用现有 YouTube 登录；下载也使用这份文件。导入或更新 Cookie 后，请关闭浏览并重新启动。仅导入 YouTube、Google 域名的未过期 Cookie，支持 HttpOnly 和会话 Cookie；Cookie 有效性仍由 YouTube 判断，失效时需重新导入或手动登录。
+
+YouTube 浏览会话另外保存在本机的 `runtime/youtube-browser/`，网页登录后的新 Cookie 不会自动回写设置中的文件。清除设置中的 Cookie 文件不会退出浏览器已保存的登录，可在 YouTube 网页中退出账号。自动分发使用下载完成的原视频，独立的视频处理任务仍可继续运行。
 
 设置中的 YouTube 代理只用于 YouTube 浏览和下载。抖音、小红书、快手、视频号的登录、状态校验和上传均显式禁用浏览器代理，不继承 Windows 系统代理。该设置无法绕过 VPN/TUN 等系统网络层转发，也不能保证平台接受当前出口 IP。小红书返回 `300012` 时，页面会显示平台的网络风险提示，可切换可靠网络或使用“打开浏览器登录”查看。
 

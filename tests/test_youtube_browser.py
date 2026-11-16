@@ -81,6 +81,102 @@ def test_youtube_browser_requires_session_and_mutation_token(client):
     assert client.get("/api/v2/youtube/browser").status_code == 401
 
 
+def test_browser_uses_saved_youtube_cookies_before_first_page_load(client):
+    cookies = (
+        "# Netscape HTTP Cookie File\n"
+        "#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t4102444800\tSID\tsaved-login\n"
+        ".youtube.com\tTRUE\t/\tFALSE\t0\tSESSION\tsession-login\n"
+        ".google.com\tTRUE\t/\tTRUE\t4102444800\tSID\tgoogle-login\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t1\tEXPIRED\told-login\n"
+        ".youtube.com.evil.test\tTRUE\t/\tTRUE\t4102444800\tOTHER\tunrelated\n"
+    )
+    response = client.post(
+        "/api/v2/settings/youtube-cookie",
+        files={"file": ("cookies.txt", cookies.encode(), "text/plain")},
+    )
+    assert response.status_code == 200
+    browser = client.app.state.youtube_browser
+    observed = {}
+
+    async def offline_page(url):
+        async def serve(route):
+            observed["header"] = (await route.request.all_headers()).get("cookie", "")
+            await route.fulfill(content_type="text/html", body="<title>Offline YouTube</title>")
+
+        await browser.context.route("**/*", serve)
+        await browser.page.goto(url)
+        observed["cookies"] = await browser.context.cookies()
+
+    browser._navigate = offline_page
+    response = client.post("/api/v2/youtube/browser/start")
+    assert response.status_code == 200, response.text
+    assert response.json()["active"]
+    assert "SID=saved-login" in observed["header"]
+    assert "SESSION=session-login" in observed["header"]
+    assert "google-login" not in observed["header"]
+    actual = {(c["domain"], c["name"]): c for c in observed["cookies"]}
+    assert set(actual) == {(".youtube.com", "SID"), (".youtube.com", "SESSION"), (".google.com", "SID")}
+    assert actual[(".youtube.com", "SID")]["httpOnly"]
+    assert actual[(".youtube.com", "SID")]["secure"]
+    assert actual[(".youtube.com", "SESSION")]["expires"] == -1
+    assert "saved-login" not in response.text
+
+
+def test_invalid_saved_browser_cookies_report_cookie_error_without_exposing_values(client):
+    response = client.post(
+        "/api/v2/settings/youtube-cookie",
+        files={"file": ("cookies.txt", b"# Netscape HTTP Cookie File\nsecret-invalid-cookie\n", "text/plain")},
+    )
+    assert response.status_code == 200
+    browser = client.app.state.youtube_browser
+
+    async def offline_page(url):
+        await browser.context.route("**/*", lambda route: route.fulfill(body="offline"))
+        await browser.page.goto(url)
+
+    browser._navigate = offline_page
+    response = client.post("/api/v2/youtube/browser/start")
+    assert response.status_code == 400
+    assert "Cookie" in response.json()["message"]
+    assert "secret-invalid-cookie" not in response.text
+    assert not client.get("/api/v2/youtube/browser").json()["active"]
+
+
+def test_switching_browser_window_preserves_current_session_cookies(tmp_path):
+    async def exercise():
+        browser = YouTubeBrowser(tmp_path)
+        observed = []
+
+        async def offline_page(url):
+            async def serve(route):
+                observed.append((await route.request.all_headers()).get("cookie", ""))
+                await route.fulfill(content_type="text/html", body="<title>Offline</title>")
+
+            await browser.context.route("**/*", serve)
+            await browser.page.goto(url)
+
+        browser._navigate = offline_page
+        real_start = browser.start
+
+        async def start_without_window(proxy, **options):
+            # Exercise the real window handoff with Chrome kept headless in tests.
+            return await real_start(proxy, **{**options, "headed": False})
+
+        try:
+            await browser.start()
+            await browser.context.add_cookies([{
+                "name": "SID", "value": "current-session", "domain": ".youtube.com",
+                "path": "/", "httpOnly": True, "secure": True,
+            }])
+            with patch.object(browser, "start", start_without_window):
+                await browser.action(BrowserAction(kind="show"))
+            assert "SID=current-session" in observed[-1]
+        finally:
+            await browser.close()
+
+    asyncio.run(exercise())
+
+
 def test_full_browser_navigation_and_keyboard_work_without_contacting_youtube(tmp_path):
     async def exercise():
         browser = YouTubeBrowser(tmp_path)
