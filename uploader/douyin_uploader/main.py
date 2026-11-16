@@ -10,6 +10,7 @@ from pathlib import Path
 from patchright.async_api import Page
 from patchright.async_api import Playwright
 from patchright.async_api import async_playwright
+from patchright.async_api import TimeoutError as BrowserTimeoutError
 
 from conf import DEBUG_MODE, LOCAL_CHROME_HEADLESS, LOCAL_CHROME_PATH
 from uploader.base_video import BaseVideoUploader
@@ -24,6 +25,7 @@ from utils.publish_receipt import attempted, confirmed, stop_web_resubmission
 
 DOUYIN_PUBLISH_STRATEGY_IMMEDIATE = "immediate"
 DOUYIN_PUBLISH_STRATEGY_SCHEDULED = "scheduled"
+DOUYIN_AUTH_TIMEOUT_MS = 15000
 
 
 def _msg(emoji: str, text: str) -> str:
@@ -57,16 +59,26 @@ async def cookie_auth(account_file):
             context = await browser.new_context(storage_state=account_file)
             context = await set_init_script(context)
             page = await context.new_page()
-            await page.goto("https://creator.douyin.com/creator-micro/content/upload")
-            try:
-                await page.wait_for_url("https://creator.douyin.com/creator-micro/content/upload", timeout=5000)
-            except Exception:
+            await page.goto(
+                "https://creator.douyin.com/creator-micro/content/upload",
+                wait_until="domcontentloaded", timeout=30000,
+            )
+            login = page.get_by_text("手机号登录", exact=True).or_(
+                page.get_by_text("扫码登录", exact=True)
+            ).filter(visible=True)
+            upload = page.locator('input[type="file"]')
+            # The SPA can keep the upload URL while loading an anonymous login
+            # screen. URL alone and absence of login text cannot prove a session.
+            await login.or_(upload).first.wait_for(
+                state="attached", timeout=DOUYIN_AUTH_TIMEOUT_MS,
+            )
+            if await login.count():
                 return False
-
-            if await page.get_by_text("手机号登录").count() or await page.get_by_text("扫码登录").count():
-                return False
-
-            return True
+            if page.url.startswith("https://creator.douyin.com/creator-micro/content/upload") and await upload.count():
+                return True
+            raise RuntimeError("抖音登录状态检查未完成，请检查网络后重试；尚未判定登录失效")
+        except BrowserTimeoutError:
+            raise RuntimeError("抖音登录状态检查未完成，请检查网络后重试；尚未判定登录失效") from None
         finally:
             await browser.close()
 
