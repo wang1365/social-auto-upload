@@ -3,7 +3,11 @@ import { onBeforeRouteLeave } from "vue-router";
 import { onMounted, ref, watch } from "vue";
 import { Check, Upload, Delete } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
-import { api } from "../api";
+import { api, post, prefix } from "../api";
+import {
+  BrowserHelperUnavailable,
+  importYouTubeCookiesFromBrowser,
+} from "../browser-cookie-import";
 import { act, confirm } from "../state";
 interface Settings {
   downloadProxy: string;
@@ -29,6 +33,11 @@ const busy = ref(false);
 const tab = ref("download");
 const advanced = ref<string[]>([]);
 const cookieInput = ref<HTMLInputElement>();
+const cookieBusy = ref(false);
+const helperDialog = ref(false);
+const extensionsUrl = /Edg\//.test(navigator.userAgent)
+  ? "edge://extensions"
+  : "chrome://extensions";
 const presets = ref<{ name: string; tags: string }[]>([]);
 const groups = [
   {
@@ -227,6 +236,38 @@ async function cookie(event: Event) {
     });
   if (cookieInput.value) cookieInput.value.value = "";
 }
+async function importFromBrowser() {
+  if (cookieBusy.value) return;
+  cookieBusy.value = true;
+  try {
+    const cookies = await importYouTubeCookiesFromBrowser();
+    const result = await post<
+      Pick<Settings, "youtubeCookieConfigured" | "youtubeCookieFileName">
+    >("/settings/youtube-cookie/browser", { cookies });
+    settings.value.youtubeCookieConfigured = result.youtubeCookieConfigured;
+    settings.value.youtubeCookieFileName = result.youtubeCookieFileName;
+    ElMessage.success("已从当前浏览器导入，关闭并重新启动 YouTube 浏览后生效");
+  } catch (error) {
+    if (error instanceof BrowserHelperUnavailable) helperDialog.value = true;
+    else
+      ElMessage.error(
+        error instanceof Error ? error.message : "导入失败，请重试",
+      );
+  } finally {
+    cookieBusy.value = false;
+  }
+}
+async function copyExtensionsUrl() {
+  try {
+    await navigator.clipboard.writeText(extensionsUrl);
+    ElMessage.success("扩展管理地址已复制，请粘贴到浏览器地址栏打开");
+  } catch {
+    ElMessage.info("请手动复制扩展管理地址到浏览器地址栏");
+  }
+}
+function reloadPage() {
+  window.location.reload();
+}
 async function clearCookie() {
   if (await confirm("移除已保存的 YouTube 登录凭据？", "清除登录凭据"))
     await act(async () => {
@@ -296,13 +337,26 @@ async function clearCookie() {
                 }}</span
               >
               <p>
-                导入 Netscape 格式的 Cookie 文件，用于 YouTube
-                网页登录和视频下载。导入后请关闭并重新启动 YouTube 浏览器。
+                从当前 Chrome / Edge 一键导入已登录的 YouTube 凭据，也可导入
+                Netscape 格式文件。 导入后请关闭并重新启动 YouTube 浏览器。
               </p>
-              <el-button :icon="Upload" @click="cookieInput?.click()"
+              <el-button
+                type="primary"
+                :icon="Upload"
+                :loading="cookieBusy"
+                @click="importFromBrowser"
+                >一键从当前浏览器导入</el-button
+              >
+              <el-button
+                :icon="Upload"
+                :disabled="cookieBusy"
+                @click="cookieInput?.click()"
                 >导入文件</el-button
+              ><el-button link @click="helperDialog = true"
+                >安装浏览器助手</el-button
               ><el-button
                 v-if="settings.youtubeCookieConfigured"
+                :disabled="cookieBusy"
                 text
                 type="danger"
                 @click="clearCookie"
@@ -457,4 +511,51 @@ async function clearCookie() {
     </section>
     <el-skeleton v-else :rows="6" animated class="panel" />
   </div>
+  <el-dialog v-model="helperDialog" title="安装浏览器助手" width="620px">
+    <p>
+      首次安装一次，以后点击导入按钮即可读取当前浏览器的 YouTube
+      登录凭据，无需手动导出文件。
+    </p>
+    <ol class="helper-steps">
+      <li>
+        <a :href="prefix + '/settings/browser-helper.zip'" download
+          >下载浏览器助手</a
+        >，解压到一个固定文件夹。
+      </li>
+      <li>
+        在 Chrome / Edge 地址栏打开 <code>{{ extensionsUrl }}</code>
+        <el-button link type="primary" @click="copyExtensionsUrl"
+          >复制地址</el-button
+        >。
+      </li>
+      <li>
+        开启“开发者模式”，点击“加载已解压的扩展程序”，选择包含 manifest.json
+        的文件夹。
+      </li>
+      <li>
+        在已登录 YouTube
+        的同一浏览器和个人资料中打开本页，刷新后点击“一键从当前浏览器导入”。
+      </li>
+    </ol>
+    <p class="muted small">
+      助手只读取 YouTube / Google 凭据，并在您点击导入后保存到本机拾光分发。
+    </p>
+    <template #footer
+      ><el-button @click="helperDialog = false">稍后安装</el-button
+      ><el-button type="primary" @click="reloadPage"
+        >已安装，刷新页面</el-button
+      ></template
+    >
+  </el-dialog>
 </template>
+
+<style scoped>
+.helper-steps {
+  margin: 18px 0;
+  padding-left: 22px;
+  line-height: 1.8;
+}
+.helper-steps li {
+  margin: 12px 0;
+}
+</style>

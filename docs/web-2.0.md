@@ -38,13 +38,17 @@ uv run sau-web --port 8766 --home D:\ShiguangData
 - **下载中心**：创建单条 YouTube 下载，查看字幕和后续处理任务。历史素材仍可预览，但不会补造旧日志。
 - **YouTube 浏览**：启动本机 Chrome 浏览会话，在系统内浏览完整站点、搜索、访问频道和点击视频。支持中文输入与粘贴。打开视频后可直接下载，或编辑标题、正文、话题并选择多个已登录账号，确认后下载并自动排队分发。下载失败不会创建发布任务；重复提交不会重复分发。任务详情可查看各平台的后续发布状态。
 - **账号管理**：扫码登录、检查状态、修改名称、导入导出登录凭据。如果扫码流程受验证阻碍，可在原任务结束后使用“打开浏览器登录”。
-- **设置**：配置下载代理、YouTube Netscape Cookie、处理参数和话题模板。高级处理参数默认折叠。
+- **设置**：配置下载代理、从当前 Chrome / Edge 一键导入 YouTube 登录凭据（首次需安装浏览器助手），或导入 Netscape Cookie 文件；配置处理参数和话题模板。高级处理参数默认折叠。
 
 视频号不单独提交正文描述。首版 Web 只提供立即发布视频；B站、图文和原有定时能力继续通过已有 CLI/底层入口使用，不在此版本扩展 UI。
 
 YouTube 网页画面和交互显示在系统内；需要声音时可点击“独立窗口播放”，沿用当前浏览会话的 Cookie 在 Chrome 窗口播放。启动浏览时自动加载设置中已导入的 Netscape Cookie，可复用现有 YouTube 登录；下载也使用这份文件。导入或更新 Cookie 后，请关闭浏览并重新启动。仅导入 YouTube、Google 域名的未过期 Cookie，支持 HttpOnly 和会话 Cookie；Cookie 有效性仍由 YouTube 判断，失效时需重新导入或手动登录。
 
 YouTube 浏览会话另外保存在本机的 `runtime/youtube-browser/`，网页登录后的新 Cookie 不会自动回写设置中的文件。清除设置中的 Cookie 文件不会退出浏览器已保存的登录，可在 YouTube 网页中退出账号。自动分发使用下载完成的原视频，独立的视频处理任务仍可继续运行。
+
+在日常使用并已登录 YouTube 的 Chrome / Edge 中打开“设置 → 下载设置 → YouTube 登录凭据”，点击“一键从当前浏览器导入”。首次使用会显示助手安装引导：下载压缩包、解压到固定文件夹，进入 `chrome://extensions` 或 `edge://extensions`，开启开发者模式并加载已解压的扩展。安装后刷新设置页，后续每次点击导入即可，无需手工导出文件。多个人资料需要在已登录 YouTube 的那一个资料中安装和使用助手。
+
+助手使用浏览器 Cookie API 读取当前浏览器个人资料中的 YouTube / Google 凭据，只响应本机设置页中用户触发的导入操作；不读取其他网站或上传到第三方。导入失败、没有登录凭据或格式无效时，保留原有凭据。凭据不通过日志或 API 响应返回；导入后仍需关闭并重新启动系统内的 YouTube 浏览会话，且 Cookie 是否被接受由 YouTube 判断。浏览器助手随源码和 wheel 一起提供，下载接口位于 `/api/v2/settings/browser-helper.zip`，受本机会话保护。
 
 设置中的 YouTube 代理只用于 YouTube 浏览和下载。抖音、小红书、快手、视频号的登录、状态校验和上传均显式禁用浏览器代理，不继承 Windows 系统代理。该设置无法绕过 VPN/TUN 等系统网络层转发，也不能保证平台接受当前出口 IP。小红书返回 `300012` 时，页面会显示平台的网络风险提示，可切换可靠网络或使用“打开浏览器登录”查看。
 
@@ -87,3 +91,5 @@ npm.cmd --prefix sau_frontend test
 Python 代码位于 `sau_web/`，前端位于 `sau_frontend/`，核心媒体与平台能力位于 `sau_core/`、`uploader/`。接口统一使用 `/api/v2`，前端类型从 OpenAPI 生成。构建产物不入库，由构建脚本生成后打入 wheel。
 
 自动化验证使用临时运行目录和模拟平台，不使用真实账号，不发布真实内容。真实四平台扫码、人工验证、平台改版及实际视频发布需要单独联调。
+
+浏览器助手集成测试会用 Playwright Chromium 加载真实扩展、注入虚构 Cookie，并阻止外部站点请求。运行前通过 `uv run playwright install chromium` 安装对应 Chromium；已有 Chrome for Testing 时，可用环境变量 `SAU_TEST_CHROMIUM_PATH` 指定其可执行文件。日常运行与助手安装支持 Chrome / Edge，无需该测试环境变量。

@@ -540,6 +540,40 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v2/settings/youtube-cookie/browser": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Import Browser Cookie */
+    post: operations["import_browser_cookie_api_v2_settings_youtube_cookie_browser_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v2/settings/browser-helper.zip": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Browser Helper */
+    get: operations["browser_helper_api_v2_settings_browser_helper_zip_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v2/events": {
     parameters: {
       query?: never;
@@ -652,6 +686,37 @@ export interface components {
        * @default 1
        */
       clicks: number;
+    };
+    /** BrowserCookie */
+    BrowserCookie: {
+      /** Name */
+      name: string;
+      /** Value */
+      value: string;
+      /** Domain */
+      domain: string;
+      /**
+       * Path
+       * @default /
+       */
+      path: string;
+      /**
+       * Secure
+       * @default true
+       */
+      secure: boolean;
+      /**
+       * Httponly
+       * @default false
+       */
+      httpOnly: boolean;
+      /** Expires */
+      expires?: number | null;
+    };
+    /** BrowserCookieImport */
+    BrowserCookieImport: {
+      /** Cookies */
+      cookies: components["schemas"]["BrowserCookie"][];
     };
     /** BrowserState */
     BrowserState: {
@@ -2074,6 +2139,59 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
+      };
+    };
+  };
+  import_browser_cookie_api_v2_settings_youtube_cookie_browser_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["BrowserCookieImport"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": unknown;
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  browser_helper_api_v2_settings_browser_helper_zip_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": unknown;
+        };
       };
     };
   };

@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "拾光分发浏览器助手",
+  "version": "1.0.0",
+  "description": "点击拾光分发设置中的导入按钮，将当前浏览器的 YouTube 登录凭据保存到本机。",
+  "permissions": ["cookies"],
+  "host_permissions": ["https://*.youtube.com/*", "https://*.google.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["http://127.0.0.1/*", "http://localhost/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

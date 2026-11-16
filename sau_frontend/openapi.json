@@ -1401,6 +1401,58 @@
         }
       }
     },
+    "/api/v2/settings/youtube-cookie/browser": {
+      "post": {
+        "summary": "Import Browser Cookie",
+        "operationId": "import_browser_cookie_api_v2_settings_youtube_cookie_browser_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserCookieImport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/settings/browser-helper.zip": {
+      "get": {
+        "summary": "Browser Helper",
+        "operationId": "browser_helper_api_v2_settings_browser_helper_zip_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/events": {
       "get": {
         "summary": "Events",
@@ -1634,6 +1686,81 @@
           "kind"
         ],
         "title": "BrowserAction"
+      },
+      "BrowserCookie": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 32768,
+            "title": "Value"
+          },
+          "domain": {
+            "type": "string",
+            "maxLength": 253,
+            "minLength": 1,
+            "title": "Domain"
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Path",
+            "default": "/"
+          },
+          "secure": {
+            "type": "boolean",
+            "title": "Secure",
+            "default": true
+          },
+          "httpOnly": {
+            "type": "boolean",
+            "title": "Httponly",
+            "default": false
+          },
+          "expires": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "value",
+          "domain"
+        ],
+        "title": "BrowserCookie"
+      },
+      "BrowserCookieImport": {
+        "properties": {
+          "cookies": {
+            "items": {
+              "$ref": "#/components/schemas/BrowserCookie"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "title": "Cookies"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "cookies"
+        ],
+        "title": "BrowserCookieImport"
       },
       "BrowserState": {
         "properties": {

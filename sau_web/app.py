@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import mimetypes
 import os
@@ -10,6 +11,7 @@ import shutil
 import subprocess
 import threading
 import uuid
+import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -25,6 +27,7 @@ from sau_web.paths import default_home
 from sau_web.runtime import Runtime, configure
 from sau_web.store import ACTIVE, Conflict, Store
 from sau_web.youtube_browser import YouTubeBrowser, load_browser_cookies, youtube_video_url
+from sau_web.youtube_cookies import browser_cookies_to_netscape
 
 API = "/api/v2"
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm", ".flv", ".wmv"}
@@ -707,12 +710,9 @@ def create_app(home: Path | None = None, *, start_workers=True):
             )
         )
 
-    @app.post(API + "/settings/youtube-cookie")
-    def youtube_cookie(file: UploadFile = File(...)):
-        data = file.file.read(2 * 1024 * 1024 + 1)
+    def save_youtube_cookie(data):
         if len(data) > 2 * 1024 * 1024:
             error("Cookie 文件过大")
-        services().validate_netscape_cookie_text(file.filename or "cookies.txt", data)
         temporary = services().SYSTEM_COOKIE_DIR / f"{uuid.uuid4().hex}.txt"
         try:
             temporary.write_bytes(data)
@@ -720,9 +720,34 @@ def create_app(home: Path | None = None, *, start_workers=True):
         finally:
             temporary.unlink(missing_ok=True)
 
+    @app.post(API + "/settings/youtube-cookie")
+    def youtube_cookie(file: UploadFile = File(...)):
+        data = file.file.read(2 * 1024 * 1024 + 1)
+        services().validate_netscape_cookie_text(file.filename or "cookies.txt", data)
+        with mutation_lock:
+            return save_youtube_cookie(data)
+
+    @app.post(API + "/settings/youtube-cookie/browser")
+    def import_browser_cookie(body: schemas.BrowserCookieImport):
+        data = browser_cookies_to_netscape(body.cookies)
+        with mutation_lock:
+            return save_youtube_cookie(data)
+
+    @app.get(API + "/settings/browser-helper.zip")
+    def browser_helper():
+        source = Path(__file__).parent / "browser_helper"
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+            for name in ("manifest.json", "background.js", "content.js", "README.txt"):
+                bundle.write(source / name, name)
+        return Response(archive.getvalue(), media_type="application/zip", headers={
+            "Content-Disposition": 'attachment; filename="shiguang-browser-helper.zip"',
+        })
+
     @app.delete(API + "/settings/youtube-cookie", status_code=204)
     def clear_youtube_cookie():
-        services().SettingsService().clear_youtube_cookie()
+        with mutation_lock:
+            services().SettingsService().clear_youtube_cookie()
         return Response(status_code=204)
 
     @app.get(API + "/events")

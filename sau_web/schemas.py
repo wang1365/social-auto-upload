@@ -88,6 +88,23 @@ class SettingsInput(Input):
     publishTopicPresets: dict[str, list[str]] | None = None
 
 
+class BrowserCookie(BaseModel):
+    # Cookie values must retain whitespace exactly as exported by the browser.
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=256)
+    value: str = Field(max_length=32768)
+    domain: str = Field(min_length=1, max_length=253)
+    path: str = Field(default="/", min_length=1, max_length=2048)
+    secure: bool = True
+    httpOnly: bool = False
+    expires: float | None = Field(default=None, allow_inf_nan=False)
+
+
+class BrowserCookieImport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    cookies: list[BrowserCookie] = Field(max_length=500)
+
+
 class Task(BaseModel):
     id: str
     kind: Kind

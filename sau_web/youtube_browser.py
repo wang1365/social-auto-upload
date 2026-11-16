@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote_plus, urlsplit
 
 from playwright.async_api import Error as BrowserError, async_playwright
+from sau_web.youtube_cookies import is_youtube_cookie_domain
 
 
 YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
@@ -27,10 +28,7 @@ def load_browser_cookies(cookie_file):
                 line = line[len("#HttpOnly_"):]
             domain, subdomains, path, secure, expiry, name, value = line.split("\t")
             host = domain.lstrip(".").lower()
-            if not any(
-                host == root or host.endswith("." + root)
-                for root in ("youtube.com", "google.com")
-            ):
+            if not is_youtube_cookie_domain(host):
                 continue
             if (
                 subdomains not in {"TRUE", "FALSE"}
