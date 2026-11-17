@@ -72,11 +72,9 @@ def test_upload_wait_has_deadline(tmp_path):
 def test_douyin_upload_context_allows_its_blob_parser_worker(tmp_path):
     async def exercise():
         async with async_playwright() as p:
-            browser = await p.chromium.launch(channel='chrome')
-            try:
-                video = uploader(tmp_path)
-                video.account_file = {'cookies':[], 'origins':[]}
-                context = await video._create_upload_context(browser)
+            video = uploader(tmp_path)
+            video.headless = True
+            async with video._upload_context(p) as context:
                 await context.route('**/*', lambda route: route.fulfill(
                     content_type='text/html',
                     headers={'Content-Security-Policy':"script-src 'self' 'unsafe-eval' *"},
@@ -88,6 +86,4 @@ def test_douyin_upload_context_allows_its_blob_parser_worker(tmp_path):
                     worker.onmessage=event=>{worker.terminate();resolve(event.data)};
                     worker.onerror=reject;
                 })''') == 'parsed'
-            finally:
-                await browser.close()
     asyncio.run(exercise())

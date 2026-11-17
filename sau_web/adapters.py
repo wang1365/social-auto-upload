@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from utils.network import launch_browser_direct
+from utils.douyin_browser import account_profile_dir
 
 import asyncio
 import base64
@@ -27,9 +28,8 @@ def modules():
 async def check(platform: int, cookie: Path):
     if not cookie.is_file():
         return False
-    return await asyncio.wait_for(
-        modules()[platform].cookie_auth(str(cookie)), timeout=90
-    )
+    options = {"profile_dir": account_profile_dir(cookie)} if platform == 3 else {}
+    return await asyncio.wait_for(modules()[platform].cookie_auth(str(cookie), **options), timeout=90)
 
 
 async def login(platform: int, cookie: Path, callback, headed=False):
@@ -89,6 +89,7 @@ async def login(platform: int, cookie: Path, callback, headed=False):
                 return_detail=True,
                 qrcode_callback=callback,
                 headless=not headed,
+                **({"profile_dir": account_profile_dir(cookie)} if platform == 3 else {}),
             ),
             timeout=420,
         )
@@ -108,8 +109,11 @@ def make_uploader(platform, cookie, video, title, description, tags):
     if platform == 2:
         return module.TencentVideo(**common)
     uploader_type = {1: "XiaoHongShuVideo", 3: "DouYinVideo", 4: "KSVideo"}[platform]
-    return getattr(module, uploader_type)(
+    uploader = getattr(module, uploader_type)(
         # Douyin may require SMS verification on publish even with valid cookies.
         # Keep this page visible so the user can complete it without losing the upload.
         **common, desc=description, headless=platform != 3, debug=False
     )
+    if platform == 3:
+        uploader.browser_profile_dir = account_profile_dir(cookie)
+    return uploader

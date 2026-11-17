@@ -277,6 +277,12 @@ def create_app(home: Path | None = None, *, start_workers=True):
             conn.execute("BEGIN IMMEDIATE")
             resource_guard(conn, "account", account_id)
             path = services().safe_relative_file(services().COOKIE_DIR, row["filePath"])
+            if row["type"] == 3:
+                from utils.douyin_browser import ProfileInUse, remove_account_profile
+                try:
+                    remove_account_profile(path)
+                except ProfileInUse as exc:
+                    raise Conflict(str(exc)) from None
             path.unlink(missing_ok=True)
             conn.execute("DELETE FROM user_info WHERE id=?", (account_id,))
         store.event(None, "accounts", {})
