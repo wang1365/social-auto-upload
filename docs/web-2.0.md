@@ -4,7 +4,7 @@
 
 ## 源码安装与启动
 
-需要 Python 3.10–3.12、uv、Node.js 22.12+、Chrome，以及加入 PATH 的 FFmpeg/FFprobe。
+需要 Python 3.11–3.12、uv、Node.js 22.12+、Chrome，以及加入 PATH 的 FFmpeg/FFprobe。YouTube 下载器及配套的 EJS、Deno 组件由 Python 依赖自动安装。
 
 ```powershell
 # 不覆盖已有 conf.py；首次安装时从示例复制
